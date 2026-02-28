@@ -3,11 +3,13 @@
   import { onMount } from 'svelte';
   import {
     sendEmergencyBroadcast, submitBroadcastRequest, getBroadcastRequestQueue,
-    type BroadcastRequestSummary,
+    getDailySecurityReports,
+    type BroadcastRequestSummary, type DirDailySecurityReport,
   } from '$lib/stores/directors';
 
   let queue: BroadcastRequestSummary[] = $state([]);
-  let activeTab: 'emergency' | 'requests' = $state('emergency');
+  let dailyReports: DirDailySecurityReport[] = $state([]);
+  let activeTab: 'emergency' | 'requests' | 'daily' = $state('emergency');
 
   // Emergency broadcast form
   let emSubject = $state('');
@@ -26,6 +28,7 @@
 
   onMount(async () => {
     try { queue = await getBroadcastRequestQueue(); } catch {}
+    try { dailyReports = await getDailySecurityReports(); } catch {}
   });
 
   async function handleEmergency() {
@@ -59,6 +62,7 @@
 <div class="tabs">
   <button class:active={activeTab === 'emergency'} onclick={() => (activeTab = 'emergency')}>Emergency Broadcast</button>
   <button class:active={activeTab === 'requests'} onclick={() => (activeTab = 'requests')}>Request Broadcast</button>
+  <button class:active={activeTab === 'daily'} onclick={() => (activeTab = 'daily')}>Daily Reports</button>
 </div>
 
 {#if activeTab === 'emergency'}
@@ -82,7 +86,7 @@
     {#if emSuccess}<p class="success">{emSuccess}</p>{/if}
     <button class="btn-danger" onclick={handleEmergency}>Send Emergency Broadcast</button>
   </div>
-{:else}
+{:else if activeTab === 'requests'}
   <div class="form-card">
     <h2>Submit Security Broadcast Request</h2>
     <label class="field"><span class="label">Subject</span>
@@ -118,6 +122,33 @@
       </div>
     {/each}
   {/if}
+{:else if activeTab === 'daily'}
+  {#if dailyReports.length === 0}
+    <p class="muted">No daily security reports submitted yet.</p>
+  {:else}
+    <div class="daily-list">
+      {#each dailyReports as r}
+        <div class="daily-card">
+          <div class="daily-header">
+            <span class="daily-date">{r.report_date}</span>
+            <span class="daily-author">{r.submitter_name}</span>
+            {#if r.delivered_to_guardian_at}
+              <span class="badge badge-sent">Delivered</span>
+            {:else}
+              <span class="badge badge-pending">Pending</span>
+            {/if}
+          </div>
+          <p class="daily-findings">{r.findings_summary}</p>
+          {#if r.risk_notes}
+            <p class="daily-notes"><strong>Risks:</strong> {r.risk_notes}</p>
+          {/if}
+          {#if r.recommended_actions}
+            <p class="daily-notes"><strong>Actions:</strong> {r.recommended_actions}</p>
+          {/if}
+        </div>
+      {/each}
+    </div>
+  {/if}
 {/if}
 
 <style>
@@ -148,4 +179,12 @@
   .badge-approved { background:rgba(16,185,129,0.15);color:#10B981; }
   .badge-rejected { background:rgba(239,68,68,0.15);color:#EF4444; }
   .badge-sent { background:rgba(58,190,255,0.15);color:#3ABEFF; }
+  .muted { color:#94A3B8;font-size:0.8rem; }
+  .daily-list { display:flex;flex-direction:column;gap:0.4rem;max-width:700px; }
+  .daily-card { background:rgba(14,20,40,0.5);border:1px solid rgba(58,190,255,0.08);border-radius:6px;padding:0.65rem; }
+  .daily-header { display:flex;align-items:center;gap:0.5rem;margin-bottom:0.3rem; }
+  .daily-date { font-family:'Orbitron',sans-serif;font-size:0.8rem;color:#E6EDF3; }
+  .daily-author { font-size:0.75rem;color:#8B5CF6; }
+  .daily-findings { font-size:0.78rem;color:#E6EDF3;margin:0 0 0.2rem; }
+  .daily-notes { font-size:0.72rem;color:#94A3B8;margin:0.15rem 0 0; }
 </style>

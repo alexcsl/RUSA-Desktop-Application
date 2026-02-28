@@ -3477,3 +3477,61 @@ pub async fn mark_message_read(
 
     Ok(())
 }
+
+// ════════════════════════════════════════════════════════════════════════════════
+// Daily Security Reports — Guardian read-only view (TODO_DIRECTORS.md item 2)
+// ════════════════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Serialize, FromRow)]
+pub struct DirDailySecurityReport {
+    pub id: Uuid,
+    pub submitted_by: Uuid,
+    pub submitter_name: String,
+    pub report_date: NaiveDate,
+    pub findings_summary: String,
+    pub risk_notes: Option<String>,
+    pub recommended_actions: Option<String>,
+    pub delivered_to_guardian_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Get all daily security reports (for Guardian review & oversight).
+///
+/// When TheGuardian fetches reports that have not yet been marked as
+/// delivered, they are automatically stamped with `delivered_to_guardian_at`.
+///
+/// **Access:** TheGuardian, TheOverseer, or Administrator.
+#[tauri::command]
+pub async fn dir_get_daily_security_reports(
+    state: State<'_, AppState>,
+) -> Result<Vec<DirDailySecurityReport>, AppError> {
+    let user = crate::require_auth_any!(state, [
+        Role::TheGuardian, Role::TheOverseer, Role::Administrator
+    ]);
+
+    // Mark un-delivered reports as delivered when The Guardian reads them
+    if user.role == Role::TheGuardian {
+        sqlx::query(
+            "UPDATE daily_security_reports SET delivered_to_guardian_at = NOW() WHERE delivered_to_guardian_at IS NULL AND deleted_at IS NULL",
+        )
+        .execute(&state.db_pool)
+        .await?;
+    }
+
+    let reports = sqlx::query_as::<_, DirDailySecurityReport>(
+        r#"
+        SELECT d.id, d.submitted_by, u.full_name AS submitter_name,
+               d.report_date, d.findings_summary, d.risk_notes,
+               d.recommended_actions, d.delivered_to_guardian_at, d.created_at
+        FROM daily_security_reports d
+        JOIN users u ON u.id = d.submitted_by
+        WHERE d.deleted_at IS NULL
+        ORDER BY d.report_date DESC, d.created_at DESC
+        LIMIT 200
+        "#,
+    )
+    .fetch_all(&state.db_pool)
+    .await?;
+
+    Ok(reports)
+}

@@ -37,6 +37,7 @@ use commands::directors::{
     send_emergency_broadcast, send_informational_broadcast,
     send_security_message, submit_broadcast_request, terminate_personnel,
     terminate_personnel_account, update_personnel_account, upload_event_document,
+    dir_get_daily_security_reports,
 };
 use commands::engineers::{
     eng_get_approved_tests, eng_get_experiment_archive, eng_get_experiment_detail,
@@ -57,6 +58,12 @@ use commands::scientists::{
     log_experiment_session, propose_experiment, propose_new_species, propose_new_test,
     submit_experiment_conclusion, submit_final_document, submit_help_request,
     submit_math_results,
+};
+use commands::security::{
+    sec_assign_staff_to_incident, sec_create_incident_report, sec_get_incident_archive,
+    sec_get_my_broadcast_requests, sec_get_my_daily_reports, sec_get_security_messages,
+    sec_get_security_personnel, sec_send_security_message, sec_submit_broadcast_request,
+    sec_submit_daily_report,
 };
 use commands::settlers::{
     stl_assign_task, stl_forward_to_directors, stl_get_dashboard, stl_get_incoming_queue,
@@ -318,6 +325,19 @@ pub fn run() {
             stl_get_residence,
             stl_request_farming_supplies,
             stl_log_farm_health,
+            // Security Teams subsystem (UC-SH-01..05, UC-SS-01..02)
+            sec_create_incident_report,
+            sec_get_incident_archive,
+            sec_assign_staff_to_incident,
+            sec_submit_daily_report,
+            sec_submit_broadcast_request,
+            sec_get_my_broadcast_requests,
+            sec_send_security_message,
+            sec_get_security_messages,
+            sec_get_security_personnel,
+            sec_get_my_daily_reports,
+            // Guardian daily security reports view
+            dir_get_daily_security_reports,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

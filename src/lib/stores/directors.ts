@@ -657,3 +657,23 @@ export async function recallMessage(messageId: string): Promise<void> {
 export async function markMessageRead(messageId: string): Promise<void> {
   await invoke('mark_message_read', { messageId });
 }
+
+// ── Daily Security Reports (Guardian view) ────────────────────────────────────
+
+export interface DirDailySecurityReport {
+  id: string;
+  submitted_by: string;
+  submitter_name: string;
+  report_date: string;
+  findings_summary: string;
+  risk_notes: string | null;
+  recommended_actions: string | null;
+  delivered_to_guardian_at: string | null;
+  created_at: string;
+}
+
+export async function getDailySecurityReports(): Promise<
+  DirDailySecurityReport[]
+> {
+  return invoke<DirDailySecurityReport[]>('dir_get_daily_security_reports');
+}
