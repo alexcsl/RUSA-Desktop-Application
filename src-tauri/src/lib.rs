@@ -7,6 +7,14 @@ pub mod commands;
 pub mod error;
 pub mod state;
 
+use commands::astronauts::{
+    ast_assign_mission, ast_get_all_missions, ast_get_all_status_reports,
+    ast_get_colleague_counters, ast_get_completion_requests_taskmaster,
+    ast_get_completion_requests_wanderer, ast_get_evidence_urls,
+    ast_get_mission_detail, ast_get_my_missions, ast_get_personal_journal,
+    ast_process_completion_request, ast_submit_completion_request,
+    ast_submit_status_report, ast_taskmaster_decide_completion,
+};
 use commands::auth::{get_current_session, login, logout};
 use commands::data_analysts::{
     get_analyst_inbox, get_data_request_detail, get_data_response, get_my_data_requests,
@@ -259,6 +267,21 @@ pub fn run() {
             eng_get_experiment_archive,
             eng_get_experiment_detail,
             eng_get_my_help_requests,
+            // Astronauts subsystem (UC-AS-01..06, UC-WAN-01..03, UC-TM-03)
+            ast_get_my_missions,
+            ast_get_mission_detail,
+            ast_submit_status_report,
+            ast_submit_completion_request,
+            ast_get_personal_journal,
+            ast_get_colleague_counters,
+            ast_get_evidence_urls,
+            ast_assign_mission,
+            ast_get_all_missions,
+            ast_process_completion_request,
+            ast_get_all_status_reports,
+            ast_get_completion_requests_wanderer,
+            ast_taskmaster_decide_completion,
+            ast_get_completion_requests_taskmaster,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

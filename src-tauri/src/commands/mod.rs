@@ -1,3 +1,4 @@
+pub mod astronauts;
 pub mod auth;
 pub mod data_analysts;
 pub mod directors;

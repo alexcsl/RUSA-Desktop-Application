@@ -1,34 +1,32 @@
 <!--
-  Directors area layout — shared nav bar for all /directors/* routes.
-  Provides sidebar navigation contextual to the logged-in director role.
+  Astronauts area layout — shared sidebar for all /astronauts/* routes.
+  Source of truth: 05_ASTRONAUTS.md
 -->
 <script lang="ts">
   import { currentUser, logout } from '$lib/stores/auth';
   import type { SessionUser } from '$lib/stores/auth';
   import { goto } from '$app/navigation';
   import { page } from '$app/stores';
-  import { getNotifications, markNotificationRead, type NotificationItem } from '$lib/stores/directors';
   import { onMount, onDestroy } from 'svelte';
+  import { getNotifications, markNotificationRead, type NotificationItem } from '$lib/stores/directors';
 
   let { children } = $props();
   let user: SessionUser | null = $state(null);
-  currentUser.subscribe((v) => (user = v));
+  const unsubUser = currentUser.subscribe((v) => (user = v));
 
   let pathVal = $state('');
-  page.subscribe((p) => (pathVal = p.url.pathname));
+  const unsubPage = page.subscribe((p) => (pathVal = p.url.pathname));
 
   let notifications: NotificationItem[] = $state([]);
   let showNotifs = $state(false);
   let emergencyAlert: NotificationItem | null = $state(null);
-  let pollTimer: ReturnType<typeof setInterval> | null = null;
-  /** Track IDs we already showed an emergency popup for */
   let shownEmergencyIds = new Set<string>();
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
 
   async function pollNotifications() {
     try {
       const fresh = await getNotifications();
       notifications = fresh;
-      // Check for new emergency notifications we haven't shown yet
       const newEmergency = fresh.find(
         (n) =>
           !n.read_at &&
@@ -42,14 +40,8 @@
     } catch {}
   }
 
-  onMount(() => {
-    pollNotifications();
-    pollTimer = setInterval(pollNotifications, 10_000); // every 10 seconds
-  });
-
-  onDestroy(() => {
-    if (pollTimer) clearInterval(pollTimer);
-  });
+  onMount(() => { pollNotifications(); pollTimer = setInterval(pollNotifications, 10_000); });
+  onDestroy(() => { unsubUser(); unsubPage(); if (pollTimer) clearInterval(pollTimer); });
 
   async function dismissNotif(id: string) {
     await markNotificationRead(id);
@@ -65,108 +57,55 @@
     }
   }
 
-  /** Format notification type into a human-readable label */
   function formatNotifType(type_: string): string {
     const map: Record<string, string> = {
-      'vote:new': 'New Vote',
-      'vote:decided': 'Vote Decided',
-      'vote:overridden': 'Vote Overridden',
-      'vote:terminated': 'Vote Terminated',
+      'mission:assigned': 'Mission Assigned',
+      'mission:status_report': 'Status Report',
+      'mission:completion_submitted': 'Completion Submitted',
+      'mission:completion:wanderer_processed': 'Forwarded to Taskmaster',
+      'mission:completion:pending_taskmaster': 'Pending Taskmaster',
+      'mission:completion:approved': 'Mission Approved',
+      'mission:completion:rejected': 'Mission Rejected',
       'task:assigned': 'Task Assigned',
-      'task:updated': 'Task Updated',
-      'relocation:issued': 'Relocation Order',
-      'event:invited': 'Event Invitation',
       'broadcast:emergency': 'EMERGENCY',
       'broadcast:security': 'SECURITY ALERT',
       'broadcast:informational': 'Broadcast',
-      'request:approved': 'Request Approved',
-      'request:denied': 'Request Denied',
-      'meeting:scheduled': 'Meeting Scheduled',
-      'mission:status_report': 'Mission Status Report',
-      'mission:completion_submitted': 'Completion Submitted',
-      'mission:completion:forwarded': 'Forwarded to Taskmaster',
     };
     return map[type_] ?? type_.replace(/[_:]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
   }
 
-  /** Format notification payload into a human-readable message */
   function formatNotifText(n: NotificationItem): string {
     const p = n.payload as Record<string, unknown>;
     switch (n.type_) {
-      case 'vote:new':
-        return `New voting session: "${p.topic ?? 'Unknown'}"`;
-      case 'vote:decided':
-        return `Vote "${p.topic ?? ''}" decided: ${p.result ?? 'unknown'}`;
-      case 'vote:overridden':
-        return `Vote "${p.topic ?? ''}" overridden by admin: ${p.decision ?? ''}`;
-      case 'vote:terminated':
-        return `Vote "${p.topic ?? ''}" terminated by admin`;
-      case 'task:assigned':
-        return `New task assigned: "${p.title ?? ''}"${p.due_date ? ` — due ${p.due_date}` : ''}`;
-      case 'task:updated':
-        return `Task "${p.title ?? ''}" was updated: ${p.status ?? ''}`;
-      case 'relocation:issued':
-        return `Relocation to ${p.destination ?? 'unknown'} (${p.type ?? ''}) — effective ${p.effective_date ?? ''}. Issued by ${p.issued_by ?? 'admin'}.`;
-      case 'event:invited':
-        return `You're invited to "${p.title ?? ''}"${p.event_date ? ` on ${new Date(p.event_date as string).toLocaleDateString()}` : ''}`;
+      case 'mission:assigned':
+        return `New mission: "${p.title ?? ''}" at ${p.location ?? 'unknown'} — ${p.type ?? ''} (${p.danger_level ?? 'n/a'})`;
+      case 'mission:completion:approved':
+        return `Your mission completion was approved!${p.note ? ` Note: ${p.note}` : ''}`;
+      case 'mission:completion:rejected':
+        return `Mission completion rejected${p.reason ? `: ${p.reason}` : ''}`;
+      case 'mission:completion:wanderer_processed':
+        return `Completion request forwarded to Taskmaster for final review.`;
       case 'broadcast:emergency':
       case 'broadcast:security':
-        return `${p.subject ?? 'Emergency Alert'}: ${p.content ?? ''}`;
-      case 'broadcast:informational':
-        return `${p.subject ?? 'Broadcast'}: ${p.content ?? ''}`;
-      case 'request:approved':
-        return `Your request "${p.title ?? ''}" was approved`;
-      case 'request:denied':
-        return `Your request "${p.title ?? ''}" was denied${p.reason ? `: ${p.reason}` : ''}`;
-      case 'meeting:scheduled':
-        return `Meeting "${p.title ?? ''}" scheduled for ${p.scheduled_at ? new Date(p.scheduled_at as string).toLocaleString() : 'TBD'}`;
+        return `${p.subject ?? 'Alert'}: ${p.content ?? ''}`;
       default:
-        // Fallback: show key fields from payload
         return Object.entries(p).map(([k, v]) => `${k}: ${v}`).join(' | ') || 'No details';
     }
   }
 
-  /** Check if a notification is an emergency/critical type */
   function isEmergencyNotif(n: NotificationItem): boolean {
     return n.type_ === 'broadcast:emergency' || n.type_ === 'broadcast:security';
   }
 
-  interface NavLink { label: string; href: string; roles: string[]; }
+  interface NavLink { label: string; href: string; }
 
   const navLinks: NavLink[] = [
-    { label: 'Votes', href: '/directors/votes', roles: ['all'] },
-    { label: 'Meetings', href: '/directors/meetings', roles: ['all'] },
-    { label: 'Financial Queue', href: '/directors/accountant/queue', roles: ['TheAccountant'] },
-    { label: 'Relocate', href: '/directors/nomad/relocate', roles: ['TheNomad', 'TheOverseer'] },
-    { label: 'Tasks (Math/Phys)', href: '/directors/artificer/tasks/new', roles: ['TheArtificer'] },
-    { label: 'Proposals (Art)', href: '/directors/artificer/proposals', roles: ['TheArtificer'] },
-    { label: 'Test Proposals', href: '/directors/artificer/test-proposals', roles: ['TheArtificer'] },
-    { label: 'Final Docs', href: '/directors/artificer/final-docs', roles: ['TheArtificer'] },
-    { label: 'Math Results', href: '/directors/artificer/math-results', roles: ['TheArtificer'] },
-    { label: 'Tasks (Bio/Chem)', href: '/directors/observer/tasks/new', roles: ['TheObserver'] },
-    { label: 'Proposals (Obs)', href: '/directors/observer/proposals', roles: ['TheObserver'] },
-    { label: 'Test Proposals', href: '/directors/observer/test-proposals', roles: ['TheObserver'] },
-    { label: 'Final Docs', href: '/directors/observer/final-docs', roles: ['TheObserver'] },
-    { label: 'Assign Mission', href: '/directors/wanderer/missions/new', roles: ['TheWanderer'] },
-    { label: 'Completion Requests', href: '/directors/wanderer/completion-requests', roles: ['TheWanderer'] },
-    { label: 'Status Reports', href: '/directors/wanderer/status-reports', roles: ['TheWanderer'] },
-    { label: 'Dashboard', href: '/directors/taskmaster/dashboard', roles: ['TheTaskmaster'] },
-    { label: 'Mission Completions', href: '/directors/taskmaster/mission-completions', roles: ['TheTaskmaster'] },
-    { label: 'Security', href: '/directors/guardian/security-reports', roles: ['TheGuardian'] },
-    { label: 'Data Requests', href: '/directors/statistician/requests', roles: ['TheStatistician'] },
-    { label: 'Events', href: '/directors/coordinator/events/new', roles: ['TheCoordinator'] },
-    { label: 'Security Line', href: '/directors/overseer/security-line', roles: ['TheOverseer'] },
-    { label: 'Broadcasts', href: '/directors/anchorman/broadcast-requests', roles: ['TheAnchorman'] },
-    { label: 'Archive', href: '/directors/librarian/archive', roles: ['TheLibrarian'] },
-    { label: 'Submit Data Request', href: '/data/request/new', roles: ['all'] },
-    { label: 'Messages', href: '/messaging/inbox?channel=general', roles: ['all'] },
+    { label: 'Missions', href: '/astronauts/missions' },
+    { label: 'Journal', href: '/astronauts/journal' },
+    { label: 'Broadcast Request', href: '/astronauts/broadcast-request' },
+    { label: 'Submit Data Request', href: '/data/request/new' },
+    { label: 'Messages', href: '/messaging/inbox?channel=general' },
   ];
-
-  function visibleLinks(role: string | undefined): NavLink[] {
-    if (!role) return [];
-    // GeneralDirector and TheDirector see only Votes
-    return navLinks.filter((l) => l.roles.includes('all') || l.roles.includes(role));
-  }
 
   async function handleLogout() { await logout(); goto('/auth'); }
 </script>
@@ -175,7 +114,7 @@
   <header class="top-bar">
     <div class="brand">
       <img src="/Logo.png" alt="RUSA" class="logo" />
-      <h1>Directors Command</h1>
+      <h1>Astronaut Division</h1>
     </div>
     <div class="user-section">
       <button class="notif-btn" onclick={() => (showNotifs = !showNotifs)}>
@@ -183,7 +122,7 @@
       </button>
       {#if user}
         <span class="user-name">{user.full_name}</span>
-        <span class="role-tag">{user.role}</span>
+        <span class="role-tag">Astronaut</span>
         <button class="btn-sm" onclick={handleLogout}>Log Out</button>
       {/if}
     </div>
@@ -218,7 +157,7 @@
 
   <div class="body">
     <nav class="side-nav">
-      {#each visibleLinks(user?.role) as link}
+      {#each navLinks as link}
         <a href={link.href} class:active={pathVal.startsWith(link.href)}>
           {link.label}
         </a>
@@ -246,7 +185,7 @@
   .notif-panel { background:#1F2937;border-bottom:1px solid rgba(58,190,255,0.1);max-height:200px;overflow-y:auto;padding:0.5rem 1rem; }
   .notif-item { display:flex;align-items:center;gap:0.5rem;padding:0.3rem 0;font-size:0.75rem;border-bottom:1px solid rgba(255,255,255,0.05); }
   .notif-item.notif-emergency { background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);border-radius:4px;padding:0.4rem 0.5rem;margin:0.15rem 0; }
-  .notif-type { color:#8B5CF6;font-weight:600;min-width:100px;white-space:nowrap; }
+  .notif-type { color:#8B5CF6;font-weight:600;min-width:120px;white-space:nowrap; }
   .notif-type.emergency-type { color:#EF4444;text-transform:uppercase;animation:pulse-red 2s ease-in-out infinite; }
   .notif-text { flex:1;color:#94A3B8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
   .notif-dismiss { background:none;border:none;color:#EF4444;cursor:pointer;font-size:1rem; }
