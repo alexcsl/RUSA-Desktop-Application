@@ -420,6 +420,70 @@ export async function getMathResultsForDirector(): Promise<MathResultItem[]> {
   return invoke<MathResultItem[]>('get_math_results_for_director');
 }
 
+// ── Test Proposal Queue (Artificer / Observer) ────────────────────────────────
+
+export interface TestProposalQueueItem {
+  id: string;
+  proposed_by: string;
+  proposer_name: string;
+  proposal_data: {
+    name?: string;
+    goal?: string;
+    procedure?: string;
+    species_scope?: string;
+    category?: string;
+    apparatuses?: string;
+    required_data?: string;
+    justification?: string;
+  };
+  status: string;
+  reviewer_note: string | null;
+  created_at: string;
+}
+
+export async function getTestProposalQueue(): Promise<TestProposalQueueItem[]> {
+  return invoke<TestProposalQueueItem[]>('get_test_proposal_queue');
+}
+
+export async function decideTestProposal(
+  proposalId: string,
+  decision: 'approved' | 'rejected',
+  reason?: string,
+): Promise<void> {
+  await invoke('decide_test_proposal', {
+    payload: { proposal_id: proposalId, decision, reason },
+  });
+}
+
+// ── Final Document Queue (Artificer / Observer) ───────────────────────────────
+
+export interface FinalDocQueueItem {
+  id: string;
+  experiment_id: string;
+  experiment_title: string;
+  doc_type: string;
+  document_data: Record<string, unknown>;
+  status: string;
+  submitted_by: string;
+  submitter_name: string;
+  reviewer_note: string | null;
+  created_at: string;
+}
+
+export async function getFinalDocumentQueue(): Promise<FinalDocQueueItem[]> {
+  return invoke<FinalDocQueueItem[]>('get_final_document_queue');
+}
+
+export async function decideFinalDocument(
+  documentId: string,
+  decision: 'approved' | 'rejected',
+  reason?: string,
+): Promise<void> {
+  await invoke('decide_final_document', {
+    payload: { document_id: documentId, decision, reason },
+  });
+}
+
 export async function sendEmergencyBroadcast(payload: {
   subject: string;
   content: string;

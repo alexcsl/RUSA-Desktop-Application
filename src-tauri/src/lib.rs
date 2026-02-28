@@ -15,9 +15,10 @@ use commands::data_analysts::{
 use commands::directors::{
     approve_closure_request, assign_task, create_event, create_meeting,
     create_personnel_account, decide_broadcast_request, decide_data_request,
-    decide_experiment_proposal,
+    decide_experiment_proposal, decide_final_document, decide_test_proposal,
     flag_budget_report, get_broadcast_request_queue, get_data_request_queue,
-    get_experiment_proposal_queue, get_math_results_for_director,
+    get_experiment_proposal_queue, get_final_document_queue,
+    get_math_results_for_director, get_test_proposal_queue,
     get_event_documents, get_events, get_financial_queue, get_meetings,
     get_message_recipients, get_notifications, get_outbound_review_queue,
     get_personnel_list,
@@ -157,6 +158,12 @@ pub fn run() {
             get_experiment_proposal_queue,
             decide_experiment_proposal,
             get_math_results_for_director,
+            // Test proposal review (Artificer / Observer)
+            get_test_proposal_queue,
+            decide_test_proposal,
+            // Final document review (Artificer / Observer)
+            get_final_document_queue,
+            decide_final_document,
             // Territory
             rename_territory,
             get_territories,

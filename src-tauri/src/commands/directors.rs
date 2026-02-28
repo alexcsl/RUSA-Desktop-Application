@@ -1197,6 +1197,356 @@ pub async fn get_math_results_for_director(
 }
 
 // ════════════════════════════════════════════════════════════════════════════════
+// UC-ART-06 / UC-OBS-06: Test Proposal Review Queue + Decision
+// ════════════════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct TestProposalQueueItem {
+    pub id: Uuid,
+    pub proposed_by: Uuid,
+    pub proposer_name: String,
+    pub proposal_data: serde_json::Value,
+    pub status: String,
+    pub reviewer_note: Option<String>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// List pending test proposals for the current director's domain.
+///
+/// - TheArtificer sees proposals from Physicist
+/// - TheObserver sees proposals from Chemist / Biologist
+///
+/// **Access:** TheArtificer, TheObserver, or Administrator.
+#[tauri::command]
+pub async fn get_test_proposal_queue(
+    state: State<'_, AppState>,
+) -> Result<Vec<TestProposalQueueItem>, AppError> {
+    let user = crate::require_auth_any!(state, [
+        Role::TheArtificer, Role::TheObserver, Role::Administrator
+    ]);
+
+    let role_filter: Vec<&str> = match user.role {
+        Role::TheArtificer => vec!["Physicist"],
+        Role::TheObserver  => vec!["Chemist", "Biologist"],
+        _                  => vec!["Physicist", "Chemist", "Biologist"],
+    };
+
+    let rows = sqlx::query_as::<_, TestProposalQueueItem>(
+        r#"
+        SELECT tp.id, tp.proposed_by, u.full_name AS proposer_name,
+               tp.proposal_data, tp.status, tp.reviewer_note, tp.created_at
+        FROM test_proposals tp
+        JOIN users u ON u.id = tp.proposed_by
+        JOIN roles r ON r.id = u.role_id
+        WHERE tp.status = 'pending'
+          AND r.name = ANY($1)
+        ORDER BY tp.created_at ASC
+        "#,
+    )
+    .bind(&role_filter)
+    .fetch_all(&state.db_pool)
+    .await?;
+
+    Ok(rows)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TestProposalDecisionPayload {
+    pub proposal_id: Uuid,
+    pub decision: String,   // 'approved' or 'rejected'
+    pub reason: Option<String>,
+}
+
+/// Approve or reject a test proposal.
+///
+/// On approval, a new row is created in `approved_tests`.
+///
+/// **Access:** TheArtificer, TheObserver, or Administrator.
+#[tauri::command]
+pub async fn decide_test_proposal(
+    state: State<'_, AppState>,
+    payload: TestProposalDecisionPayload,
+) -> Result<(), AppError> {
+    let user = crate::require_auth_any!(state, [
+        Role::TheArtificer, Role::TheObserver, Role::Administrator
+    ]);
+
+    if payload.decision != "approved" && payload.decision != "rejected" {
+        return Err(AppError::Internal(
+            "Decision must be 'approved' or 'rejected'.".into(),
+        ));
+    }
+
+    // Fetch the proposal
+    let row: Option<(serde_json::Value, String, Uuid)> = sqlx::query_as(
+        r#"
+        SELECT proposal_data, status, proposed_by
+        FROM test_proposals WHERE id = $1
+        "#,
+    )
+    .bind(payload.proposal_id)
+    .fetch_optional(&state.db_pool)
+    .await?;
+
+    let (proposal_data, old_status, proposer_id) =
+        row.ok_or_else(|| AppError::Internal("Test proposal not found.".into()))?;
+
+    if old_status != "pending" {
+        return Err(AppError::Internal("Proposal is no longer pending.".into()));
+    }
+
+    // Update status
+    sqlx::query(
+        r#"
+        UPDATE test_proposals
+        SET status = $2, reviewer_note = $3
+        WHERE id = $1
+        "#,
+    )
+    .bind(payload.proposal_id)
+    .bind(&payload.decision)
+    .bind(&payload.reason)
+    .execute(&state.db_pool)
+    .await?;
+
+    // If approved → insert into approved_tests
+    if payload.decision == "approved" {
+        let name = proposal_data.get("name").and_then(|v| v.as_str()).unwrap_or("Unnamed");
+        let procedure = proposal_data.get("procedure").and_then(|v| v.as_str()).unwrap_or("");
+        let category = proposal_data.get("category").and_then(|v| v.as_str()).unwrap_or("physical");
+        let scope = proposal_data.get("species_scope").and_then(|v| v.as_str()).unwrap_or("matter");
+
+        sqlx::query(
+            r#"
+            INSERT INTO approved_tests (name, procedure, category, applicable_scope, accepted_at)
+            VALUES ($1, $2, $3, $4, NOW())
+            "#,
+        )
+        .bind(name)
+        .bind(procedure)
+        .bind(category)
+        .bind(scope)
+        .execute(&state.db_pool)
+        .await?;
+    }
+
+    // Notify the proposer
+    let decision_label = if payload.decision == "approved" { "approved" } else { "rejected" };
+    sqlx::query(
+        r#"
+        INSERT INTO notifications (user_id, type, payload)
+        VALUES ($1, 'test_proposal:decided', $2::jsonb)
+        "#,
+    )
+    .bind(proposer_id)
+    .bind(serde_json::json!({
+        "proposal_id": payload.proposal_id,
+        "decision": decision_label,
+        "reason": payload.reason,
+    }))
+    .execute(&state.db_pool)
+    .await?;
+
+    write_audit_log(
+        &state.db_pool,
+        "test_proposals",
+        payload.proposal_id,
+        AuditOperation::Update,
+        user.id,
+        Some(serde_json::json!({ "status": old_status })),
+        Some(serde_json::json!({
+            "status": decision_label,
+            "decided_by": user.id,
+            "reason": payload.reason,
+        })),
+    )
+    .await?;
+
+    Ok(())
+}
+
+// ════════════════════════════════════════════════════════════════════════════════
+// UC-ART-07 / UC-OBS-07: Final Document Review Queue + Decision
+// ════════════════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct FinalDocQueueItem {
+    pub id: Uuid,
+    pub experiment_id: Uuid,
+    pub experiment_title: String,
+    #[sqlx(rename = "type")]
+    pub doc_type: String,
+    pub document_data: serde_json::Value,
+    pub status: String,
+    pub submitted_by: Uuid,
+    pub submitter_name: String,
+    pub reviewer_note: Option<String>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// List pending final-object documents for the current director's domain.
+///
+/// - TheArtificer sees type = 'matter' | 'physical_object'
+/// - TheObserver sees type = 'species'
+///
+/// **Access:** TheArtificer, TheObserver, or Administrator.
+#[tauri::command]
+pub async fn get_final_document_queue(
+    state: State<'_, AppState>,
+) -> Result<Vec<FinalDocQueueItem>, AppError> {
+    let user = crate::require_auth_any!(state, [
+        Role::TheArtificer, Role::TheObserver, Role::Administrator
+    ]);
+
+    let type_filter: Vec<&str> = match user.role {
+        Role::TheArtificer => vec!["matter", "physical_object"],
+        Role::TheObserver  => vec!["species"],
+        _                  => vec!["matter", "physical_object", "species"],
+    };
+
+    let rows = sqlx::query_as::<_, FinalDocQueueItem>(
+        r#"
+        SELECT fd.id, fd.experiment_id, e.title AS experiment_title,
+               fd.type, fd.document_data, fd.status, fd.submitted_by,
+               u.full_name AS submitter_name, fd.reviewer_note, fd.created_at
+        FROM final_object_documents fd
+        JOIN users u ON u.id = fd.submitted_by
+        JOIN experiments e ON e.id = fd.experiment_id
+        WHERE fd.status = 'pending_approval'
+          AND fd.type = ANY($1)
+          AND fd.deleted_at IS NULL
+        ORDER BY fd.created_at ASC
+        "#,
+    )
+    .bind(&type_filter)
+    .fetch_all(&state.db_pool)
+    .await?;
+
+    Ok(rows)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FinalDocDecisionPayload {
+    pub document_id: Uuid,
+    pub decision: String,   // 'approved' or 'rejected'
+    pub reason: Option<String>,
+}
+
+/// Approve or reject a final-object document.
+///
+/// On approval, a new row is created in `science_archive`.
+///
+/// **Access:** TheArtificer, TheObserver, or Administrator.
+#[tauri::command]
+pub async fn decide_final_document(
+    state: State<'_, AppState>,
+    payload: FinalDocDecisionPayload,
+) -> Result<(), AppError> {
+    let user = crate::require_auth_any!(state, [
+        Role::TheArtificer, Role::TheObserver, Role::Administrator
+    ]);
+
+    if payload.decision != "approved" && payload.decision != "rejected" {
+        return Err(AppError::Internal(
+            "Decision must be 'approved' or 'rejected'.".into(),
+        ));
+    }
+
+    // Fetch the document
+    let row: Option<(Uuid, String, serde_json::Value, String, Uuid)> = sqlx::query_as(
+        r#"
+        SELECT experiment_id, type, document_data, status, submitted_by
+        FROM final_object_documents
+        WHERE id = $1 AND deleted_at IS NULL
+        "#,
+    )
+    .bind(payload.document_id)
+    .fetch_optional(&state.db_pool)
+    .await?;
+
+    let (experiment_id, doc_type, doc_data, old_status, submitter_id) =
+        row.ok_or_else(|| AppError::Internal("Final document not found.".into()))?;
+
+    if old_status != "pending_approval" {
+        return Err(AppError::Internal("Document is no longer pending approval.".into()));
+    }
+
+    let new_status = if payload.decision == "approved" { "approved" } else { "rejected" };
+
+    // Update the final_object_documents row
+    sqlx::query(
+        r#"
+        UPDATE final_object_documents
+        SET status = $2, reviewer_note = $3, approved_by = $4, approved_at = NOW()
+        WHERE id = $1 AND deleted_at IS NULL
+        "#,
+    )
+    .bind(payload.document_id)
+    .bind(new_status)
+    .bind(&payload.reason)
+    .bind(if payload.decision == "approved" { Some(user.id) } else { None })
+    .execute(&state.db_pool)
+    .await?;
+
+    // If approved → insert into science_archive
+    if payload.decision == "approved" {
+        let name = doc_data.get("name").and_then(|v| v.as_str()).unwrap_or("Unnamed");
+        let classification = doc_data.get("classification").and_then(|v| v.as_str());
+
+        sqlx::query(
+            r#"
+            INSERT INTO science_archive (type, name, classification, detail, experiment_id, submitted_by, approved_by)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            "#,
+        )
+        .bind(&doc_type)
+        .bind(name)
+        .bind(classification)
+        .bind(&doc_data)
+        .bind(experiment_id)
+        .bind(submitter_id)
+        .bind(user.id)
+        .execute(&state.db_pool)
+        .await?;
+    }
+
+    // Notify the submitter
+    sqlx::query(
+        r#"
+        INSERT INTO notifications (user_id, type, payload)
+        VALUES ($1, 'final_document:decided', $2::jsonb)
+        "#,
+    )
+    .bind(submitter_id)
+    .bind(serde_json::json!({
+        "document_id": payload.document_id,
+        "experiment_id": experiment_id,
+        "doc_type": doc_type,
+        "decision": new_status,
+        "reason": payload.reason,
+    }))
+    .execute(&state.db_pool)
+    .await?;
+
+    write_audit_log(
+        &state.db_pool,
+        "final_object_documents",
+        payload.document_id,
+        AuditOperation::Update,
+        user.id,
+        Some(serde_json::json!({ "status": old_status })),
+        Some(serde_json::json!({
+            "status": new_status,
+            "decided_by": user.id,
+            "reason": payload.reason,
+        })),
+    )
+    .await?;
+
+    Ok(())
+}
+
+// ════════════════════════════════════════════════════════════════════════════════
 // UC-TM-03: Approve or Reject Closure Request
 // ════════════════════════════════════════════════════════════════════════════════
 
