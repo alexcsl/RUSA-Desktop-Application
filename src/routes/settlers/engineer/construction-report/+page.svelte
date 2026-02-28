@@ -2,8 +2,10 @@
   UC-CE-01: Submit Construction Progress Report (Civil Engineer)
 -->
 <script lang="ts">
-  import { stlSubmitConstructionReport } from '$lib/stores/settlers';
+  import { onMount } from 'svelte';
+  import { stlSubmitConstructionReport, stlGetMyTasks, type SettlerTaskSummary } from '$lib/stores/settlers';
 
+  let tasks: SettlerTaskSummary[] = $state([]);
   let taskId = $state('');
   let constructionProgress = $state('');
   let week = $state('');
@@ -14,12 +16,21 @@
   let success = $state('');
   let submitting = $state(false);
 
+  onMount(async () => {
+    try {
+      const allTasks = await stlGetMyTasks();
+      tasks = allTasks.filter((t) => t.scope === 'construction' || t.status === 'assigned' || t.status === 'in_progress');
+    } catch (e: any) {
+      error = 'Could not load tasks: ' + (e?.message ?? e);
+    }
+  });
+
   function addMaterial() { materials = [...materials, { material: '', quantity: 0, unit: '' }]; }
   function removeMaterial(i: number) { materials = materials.filter((_, idx) => idx !== i); }
 
   async function handleSubmit() {
     error = ''; success = '';
-    if (!taskId.trim()) { error = 'Task ID is required.'; return; }
+    if (!taskId) { error = 'Please select a task.'; return; }
     if (!constructionProgress.trim()) { error = 'Construction progress is required.'; return; }
     submitting = true;
     try {
@@ -42,8 +53,19 @@
 
 <form class="form" onsubmit={(e) => { e.preventDefault(); handleSubmit(); }}>
   <label>
-    Task ID *
-    <input type="text" bind:value={taskId} placeholder="Paste the assigned task UUID" />
+    Task *
+    {#if tasks.length > 0}
+      <select bind:value={taskId}>
+        <option value="">— Select task —</option>
+        {#each tasks as t}
+          <option value={t.id}>{t.title} ({t.status}){t.deadline ? ` — due ${t.deadline}` : ''}</option>
+        {/each}
+      </select>
+    {:else}
+      <select disabled>
+        <option>Loading tasks…</option>
+      </select>
+    {/if}
   </label>
 
   <label>

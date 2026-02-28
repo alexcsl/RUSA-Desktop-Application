@@ -23,6 +23,7 @@
   let fUnit = $state('unit');
   let fMinThreshold = $state(5);
   let submitting = $state(false);
+  let deleteTarget: InventoryItem | null = $state(null);
 
   async function load() {
     loading = true; error = '';
@@ -75,16 +76,25 @@
   }
 
   async function del(it: InventoryItem) {
-    if (!confirm(`Delete "${it.item_name}"?`)) return;
+    deleteTarget = it;
+  }
+
+  async function confirmDelete() {
+    if (!deleteTarget) return;
     error = ''; success = '';
     try {
       await stlManageInventory({
         action: 'delete',
-        id: it.id,
+        id: deleteTarget.id,
       });
       success = 'Item deleted.';
+      deleteTarget = null;
       await load();
     } catch (e: any) { error = e?.message ?? String(e); }
+  }
+
+  function cancelDelete() {
+    deleteTarget = null;
   }
 </script>
 
@@ -174,6 +184,19 @@
   </table>
 {/if}
 
+<!-- Delete confirmation dialog -->
+{#if deleteTarget}
+  <div class="modal-overlay" onclick={cancelDelete} role="presentation">
+    <div class="modal" onclick={(e) => e.stopPropagation()} role="dialog">
+      <p>Delete <strong>"{deleteTarget.item_name}"</strong>?</p>
+      <div class="modal-actions">
+        <button class="btn-danger" onclick={confirmDelete}>Delete</button>
+        <button class="btn-ghost" onclick={cancelDelete}>Cancel</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
 <style>
   h2 { font-family:'Orbitron',sans-serif;color:#3ABEFF;font-size:1.1rem;margin:0 0 1rem; }
   h3 { font-family:'Orbitron',sans-serif;color:#E6EDF3;font-size:0.9rem;margin:0 0 0.5rem; }
@@ -203,4 +226,11 @@
   .btn-primary:hover { background:#60CFFF; }
   .btn-primary:disabled { opacity:0.5;cursor:not-allowed; }
   .btn-ghost { background:none;border:1px solid #374151;color:#94A3B8;padding:0.45rem 0.9rem;border-radius:4px;cursor:pointer;font-size:0.8rem; }
+  .modal-overlay { position:fixed;inset:0;background:rgba(0,0,0,0.55);display:flex;align-items:center;justify-content:center;z-index:50; }
+  .modal { background:#1F2937;border:1px solid #374151;border-radius:8px;padding:1.5rem;max-width:340px;text-align:center; }
+  .modal p { color:#E6EDF3;font-size:0.85rem;margin:0 0 1rem; }
+  .modal strong { color:#3ABEFF; }
+  .modal-actions { display:flex;gap:0.75rem;justify-content:center; }
+  .btn-danger { background:#EF4444;color:#fff;border:none;border-radius:4px;padding:0.45rem 1rem;cursor:pointer;font-weight:600;font-size:0.8rem; }
+  .btn-danger:hover { background:#DC2626; }
 </style>

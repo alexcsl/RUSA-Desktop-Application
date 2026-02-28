@@ -60,7 +60,8 @@ use commands::scientists::{
 };
 use commands::settlers::{
     stl_assign_task, stl_forward_to_directors, stl_get_dashboard, stl_get_incoming_queue,
-    stl_get_my_tasks, stl_get_residence, stl_get_settlement_inventory, stl_get_task_detail,
+    stl_get_my_tasks, stl_get_residence, stl_get_settlement_inventory, stl_get_settlement_members,
+    stl_get_task_detail,
     stl_log_building_health, stl_log_farm_health, stl_manage_inventory, stl_reject_incoming,
     stl_request_abandonment, stl_request_farming_supplies, stl_request_materials,
     stl_request_repatriation, stl_set_house_arrest, stl_submit_anomaly_report,
@@ -299,6 +300,7 @@ pub fn run() {
             stl_submit_complaint,
             stl_submit_supply_request,
             stl_get_settlement_inventory,
+            stl_get_settlement_members,
             stl_assign_task,
             stl_get_incoming_queue,
             stl_reject_incoming,

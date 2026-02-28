@@ -4,7 +4,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { stlSubmitComplaint } from '$lib/stores/settlers';
-  import { stlGetDashboard, type DashboardSettler } from '$lib/stores/settlers';
+  import { stlGetSettlementMembers, type SettlementMember } from '$lib/stores/settlers';
   import { currentUser } from '$lib/stores/auth';
   import type { SessionUser } from '$lib/stores/auth';
 
@@ -13,7 +13,7 @@
   import { onDestroy } from 'svelte';
   onDestroy(() => unsub());
 
-  let settlers: DashboardSettler[] = $state([]);
+  let settlers: SettlementMember[] = $state([]);
   let subjectUserId = $state('');
   let incidentDescription = $state('');
   let error = $state('');
@@ -22,17 +22,16 @@
 
   onMount(async () => {
     try {
-      // Try loading settlers from dashboard (Commander only); otherwise skip the picker
-      const dash = await stlGetDashboard();
-      settlers = dash.settlers.filter((s) => s.user_id !== user?.id);
-    } catch {
-      // Non-commander — no settler list available, user must type ID
+      const members = await stlGetSettlementMembers();
+      settlers = members.filter((s) => s.user_id !== user?.id);
+    } catch (e: any) {
+      error = 'Could not load settlers: ' + (e?.message ?? e);
     }
   });
 
   async function handleSubmit() {
     error = ''; success = '';
-    if (!subjectUserId.trim()) { error = 'Please select or enter the settler.'; return; }
+    if (!subjectUserId) { error = 'Please select the settler.'; return; }
     if (!incidentDescription.trim()) { error = 'Incident description is required.'; return; }
     submitting = true;
     try {
@@ -62,8 +61,10 @@
     </label>
   {:else}
     <label>
-      Settler User ID *
-      <input type="text" bind:value={subjectUserId} placeholder="Enter the settler's user ID" />
+      Settler *
+      <select disabled>
+        <option>Loading settlers…</option>
+      </select>
     </label>
   {/if}
 

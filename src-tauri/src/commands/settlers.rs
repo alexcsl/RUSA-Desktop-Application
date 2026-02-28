@@ -288,6 +288,13 @@ pub struct ResidenceInfo {
 
 // ── Farmer structs ────────────────────────────────────────────────────────────
 
+#[derive(Debug, Serialize, Deserialize, FromRow)]
+pub struct SettlementMember {
+    pub user_id: Uuid,
+    pub full_name: String,
+    pub role_name: String,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct FarmHealthPayload {
     pub log_date: String, // YYYY-MM-DD
@@ -720,6 +727,37 @@ pub async fn stl_get_settlement_inventory(
     Ok(items)
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// Shared: Get Settlement Members (any settler can list fellow settlers)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[tauri::command]
+pub async fn stl_get_settlement_members(
+    state: State<'_, AppState>,
+) -> Result<Vec<SettlementMember>, AppError> {
+    let user = crate::require_auth_any!(state, [
+        Role::SettlerCommander, Role::CivilEngineer, Role::Farmer, Role::TemporarySetter
+    ]);
+
+    let settlement_id = get_user_settlement(&state.db_pool, user.id).await?;
+
+    let members = sqlx::query_as::<_, SettlementMember>(
+        r#"
+        SELECT sa.user_id, u.full_name, r.name AS role_name
+        FROM settler_assignments sa
+        JOIN users u ON u.id = sa.user_id
+        JOIN roles r ON r.id = u.role_id
+        WHERE sa.settlement_id = $1 AND sa.departed_at IS NULL
+        ORDER BY u.full_name
+        "#,
+    )
+    .bind(settlement_id)
+    .fetch_all(&state.db_pool)
+    .await?;
+
+    Ok(members)
+}
+
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //  SETTLER COMMANDER COMMANDS
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -1004,7 +1042,7 @@ pub async fn stl_forward_to_directors(
     let req_row: (Uuid,) = sqlx::query_as(
         r#"
         INSERT INTO requests (type, status, requester_id, title, description, payload)
-        VALUES ($1, 'pending_vote', $2, $3, $4, $5)
+        VALUES ($1, 'in_vote', $2, $3, $4, $5)
         RETURNING id
         "#,
     )
@@ -1209,7 +1247,7 @@ pub async fn stl_submit_commander_anomaly(
     let req_row: (Uuid,) = sqlx::query_as(
         r#"
         INSERT INTO requests (type, status, requester_id, title, description, payload)
-        VALUES ('settler_anomaly_report', 'pending_vote', $1, $2, $3, $4)
+        VALUES ('settler_anomaly_report', 'in_vote', $1, $2, $3, $4)
         RETURNING id
         "#,
     )
@@ -1317,7 +1355,7 @@ pub async fn stl_request_abandonment(
     let req_row: (Uuid,) = sqlx::query_as(
         r#"
         INSERT INTO requests (type, status, requester_id, title, description, payload)
-        VALUES ('settlement_abandonment', 'pending_vote', $1, $2, $3, $4)
+        VALUES ('settlement_abandonment', 'in_vote', $1, $2, $3, $4)
         RETURNING id
         "#,
     )
@@ -1438,7 +1476,7 @@ pub async fn stl_request_repatriation(
     let req_row: (Uuid,) = sqlx::query_as(
         r#"
         INSERT INTO requests (type, status, requester_id, title, description, payload)
-        VALUES ('settler_repatriation', 'pending_vote', $1, $2, $3, $4)
+        VALUES ('settler_repatriation', 'in_vote', $1, $2, $3, $4)
         RETURNING id
         "#,
     )
@@ -1676,7 +1714,7 @@ pub async fn stl_submit_commander_supply(
     let user = crate::require_auth_any!(state, [Role::SettlerCommander]);
     let settlement_id = get_user_settlement(&state.db_pool, user.id).await?;
 
-    // Commander supply requests go directly to directors (status: pending_vote)
+    // Commander supply requests go directly to directors (status: in_vote)
     let row: (Uuid,) = sqlx::query_as(
         r#"
         INSERT INTO supply_requests
@@ -1698,7 +1736,7 @@ pub async fn stl_submit_commander_supply(
     let req_row: (Uuid,) = sqlx::query_as(
         r#"
         INSERT INTO requests (type, status, requester_id, title, description, payload)
-        VALUES ('settler_supply_request', 'pending_vote', $1, $2, $3, $4)
+        VALUES ('settler_supply_request', 'in_vote', $1, $2, $3, $4)
         RETURNING id
         "#,
     )

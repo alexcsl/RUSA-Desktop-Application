@@ -10,7 +10,7 @@
   let title = $state('');
   let description = $state('');
   let scope = $state('maintenance');
-  let urgency = $state('normal');
+  let urgency = $state('medium');
   let deadline = $state('');
   let error = $state('');
   let success = $state('');
@@ -86,7 +86,7 @@
       Urgency
       <select bind:value={urgency}>
         <option value="low">Low</option>
-        <option value="normal">Normal</option>
+        <option value="medium">Medium</option>
         <option value="high">High</option>
         <option value="critical">Critical</option>
       </select>

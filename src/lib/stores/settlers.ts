@@ -147,6 +147,16 @@ export async function stlGetSettlementInventory(): Promise<InventoryItem[]> {
   return invoke('stl_get_settlement_inventory');
 }
 
+/** Get settlement members (any settler — for dropdowns) */
+export interface SettlementMember {
+  user_id: string;
+  full_name: string;
+  role_name: string;
+}
+export async function stlGetSettlementMembers(): Promise<SettlementMember[]> {
+  return invoke('stl_get_settlement_members');
+}
+
 // ── Commander commands ────────────────────────────────────────────────────────
 
 /** UC-SC-01: Assign task to a settler */
