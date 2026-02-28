@@ -36,7 +36,7 @@
         description,
         scope,
         urgency,
-        deadline: new Date(deadline).toISOString(),
+        deadline,
       });
       success = `Task assigned (ID: ${id.slice(0,8)}…).`;
       title = ''; description = ''; assignedTo = ''; deadline = '';

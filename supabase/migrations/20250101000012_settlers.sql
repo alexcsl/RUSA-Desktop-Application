@@ -128,6 +128,7 @@ CREATE TABLE settler_complaints (
   incident_description TEXT NOT NULL,
   status              TEXT NOT NULL DEFAULT 'submitted'
                           CHECK (status IN ('submitted','under_review','forwarded_to_directors','resolved','rejected')),
+  vote_session_id     UUID REFERENCES vote_sessions(id),
   commander_note      TEXT,
   created_at          TIMESTAMPTZ DEFAULT NOW(),
   deleted_at          TIMESTAMPTZ,

@@ -242,6 +242,7 @@ export async function stlManageInventory(payload: {
   category?: string;
   quantity?: number;
   unit?: string;
+  min_threshold?: number;
 }): Promise<void> {
   return invoke('stl_manage_inventory', { payload });
 }

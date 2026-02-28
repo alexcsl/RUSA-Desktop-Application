@@ -249,6 +249,7 @@ pub struct ManageInventoryPayload {
     pub category: Option<String>,
     pub quantity: Option<i32>,
     pub unit: Option<String>,
+    pub min_threshold: Option<i32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -380,7 +381,7 @@ pub async fn stl_submit_progress_report(
     payload: ProgressReportPayload,
 ) -> Result<Uuid, AppError> {
     let user = crate::require_auth_any!(state, [
-        Role::SettlerCommander, Role::CivilEngineer, Role::Farmer
+        Role::SettlerCommander, Role::CivilEngineer, Role::Farmer, Role::TemporarySetter
     ]);
 
     let settlement_id = get_user_settlement(&state.db_pool, user.id).await?;
@@ -615,12 +616,9 @@ pub async fn stl_submit_supply_request(
         _ => "settler",
     };
 
-    // Commander's supply requests go directly to vote; others go to commander review
-    let status = if user.role == Role::SettlerCommander {
-        "pending_vote"
-    } else {
-        "pending_commander"
-    };
+    // All supply requests from the shared endpoint go to commander review.
+    // Commanders should use stl_submit_commander_supply for direct→Directors routing.
+    let status = "pending_commander";
 
     let row: (Uuid,) = sqlx::query_as(
         r#"
@@ -1063,9 +1061,10 @@ pub async fn stl_forward_to_directors(
         }
         "complaint" => {
             sqlx::query(
-                r#"UPDATE settler_complaints SET status = 'forwarded_to_directors'
-                   WHERE id = $1 AND settlement_id = $2"#,
+                r#"UPDATE settler_complaints SET status = 'forwarded_to_directors', vote_session_id = $1
+                   WHERE id = $2 AND settlement_id = $3"#,
             )
+            .bind(session_row.0)
             .bind(payload.item_id)
             .bind(settlement_id)
             .execute(&state.db_pool)
@@ -1791,10 +1790,12 @@ pub async fn stl_manage_inventory(
                 .ok_or_else(|| AppError::Internal("item_name is required for add.".into()))?;
             let quantity = payload.quantity.unwrap_or(0);
 
+            let min_thresh = payload.min_threshold.unwrap_or(0);
+
             sqlx::query(
                 r#"
-                INSERT INTO settlement_inventory (settlement_id, item_name, category, quantity, unit, last_updated_by)
-                VALUES ($1, $2, $3, $4, $5, $6)
+                INSERT INTO settlement_inventory (settlement_id, item_name, category, quantity, unit, min_threshold, last_updated_by)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
                 "#,
             )
             .bind(settlement_id)
@@ -1802,6 +1803,7 @@ pub async fn stl_manage_inventory(
             .bind(&payload.category)
             .bind(quantity)
             .bind(&payload.unit)
+            .bind(min_thresh)
             .bind(user.id)
             .execute(&state.db_pool)
             .await?;
@@ -1817,15 +1819,17 @@ pub async fn stl_manage_inventory(
                     category = COALESCE($2, category),
                     quantity = COALESCE($3, quantity),
                     unit = COALESCE($4, unit),
-                    last_updated_by = $5,
+                    min_threshold = COALESCE($5, min_threshold),
+                    last_updated_by = $6,
                     updated_at = NOW()
-                WHERE id = $6 AND settlement_id = $7 AND deleted_at IS NULL
+                WHERE id = $7 AND settlement_id = $8 AND deleted_at IS NULL
                 "#,
             )
             .bind(&payload.item_name)
             .bind(&payload.category)
             .bind(payload.quantity)
             .bind(&payload.unit)
+            .bind(payload.min_threshold)
             .bind(user.id)
             .bind(id)
             .bind(settlement_id)

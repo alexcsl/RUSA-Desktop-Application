@@ -65,6 +65,7 @@
         category: fCategory,
         quantity: fQuantity,
         unit: fUnit,
+        min_threshold: fMinThreshold,
       });
       success = editId ? 'Item updated.' : 'Item added.';
       startNew();
