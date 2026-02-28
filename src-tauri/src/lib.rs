@@ -30,6 +30,13 @@ use commands::directors::{
     send_security_message, submit_broadcast_request, terminate_personnel,
     terminate_personnel_account, update_personnel_account, upload_event_document,
 };
+use commands::engineers::{
+    eng_get_approved_tests, eng_get_experiment_archive, eng_get_experiment_detail,
+    eng_get_my_help_requests, eng_get_my_tasks, eng_get_my_test_proposals,
+    eng_get_progress_reports, eng_get_species_archive, eng_log_daily_experiment,
+    eng_propose_new_test, eng_submit_experiment_conclusion, eng_submit_help_request,
+    eng_submit_progress_report,
+};
 use commands::messaging::{
     add_group_member, create_messaging_group, delete_message, delete_messaging_group,
     get_eligible_recipients, get_group_members, get_inbox, get_messaging_groups,
@@ -238,6 +245,20 @@ pub fn run() {
             propose_new_species,
             get_final_documents,
             get_my_test_proposals,
+            // Engineers subsystem (UC-GE-01..03, UC-AGE-01..06, UC-BE-01..05)
+            eng_get_my_tasks,
+            eng_submit_progress_report,
+            eng_get_progress_reports,
+            eng_submit_help_request,
+            eng_get_approved_tests,
+            eng_propose_new_test,
+            eng_get_my_test_proposals,
+            eng_log_daily_experiment,
+            eng_submit_experiment_conclusion,
+            eng_get_species_archive,
+            eng_get_experiment_archive,
+            eng_get_experiment_detail,
+            eng_get_my_help_requests,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
