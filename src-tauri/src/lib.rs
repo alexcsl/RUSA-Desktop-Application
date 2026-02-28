@@ -58,6 +58,15 @@ use commands::scientists::{
     submit_experiment_conclusion, submit_final_document, submit_help_request,
     submit_math_results,
 };
+use commands::settlers::{
+    stl_assign_task, stl_forward_to_directors, stl_get_dashboard, stl_get_incoming_queue,
+    stl_get_my_tasks, stl_get_residence, stl_get_settlement_inventory, stl_get_task_detail,
+    stl_log_building_health, stl_log_farm_health, stl_manage_inventory, stl_reject_incoming,
+    stl_request_abandonment, stl_request_farming_supplies, stl_request_materials,
+    stl_request_repatriation, stl_set_house_arrest, stl_submit_anomaly_report,
+    stl_submit_commander_anomaly, stl_submit_commander_supply, stl_submit_complaint,
+    stl_submit_construction_report, stl_submit_progress_report, stl_submit_supply_request,
+};
 use commands::voting::{
     admin_override_vote, admin_terminate_vote, cast_vote, change_vote,
     get_pending_votes, get_vote_session_detail, get_vote_sessions,
@@ -282,6 +291,31 @@ pub fn run() {
             ast_get_completion_requests_wanderer,
             ast_taskmaster_decide_completion,
             ast_get_completion_requests_taskmaster,
+            // Settlers subsystem (UC-PS-01..06, UC-SC-01..08, UC-CE-01..04, UC-FA-01..02, UC-TS-01..03)
+            stl_get_my_tasks,
+            stl_get_task_detail,
+            stl_submit_progress_report,
+            stl_submit_anomaly_report,
+            stl_submit_complaint,
+            stl_submit_supply_request,
+            stl_get_settlement_inventory,
+            stl_assign_task,
+            stl_get_incoming_queue,
+            stl_reject_incoming,
+            stl_forward_to_directors,
+            stl_submit_commander_anomaly,
+            stl_request_abandonment,
+            stl_request_repatriation,
+            stl_set_house_arrest,
+            stl_get_dashboard,
+            stl_submit_commander_supply,
+            stl_manage_inventory,
+            stl_submit_construction_report,
+            stl_request_materials,
+            stl_log_building_health,
+            stl_get_residence,
+            stl_request_farming_supplies,
+            stl_log_farm_health,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -5,4 +5,5 @@ pub mod directors;
 pub mod engineers;
 pub mod messaging;
 pub mod scientists;
+pub mod settlers;
 pub mod voting;
