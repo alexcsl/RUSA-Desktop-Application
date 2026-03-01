@@ -6,7 +6,7 @@
   import { submitCompletionRequest } from '$lib/stores/astronauts';
 
   let missionId = $state('');
-  const unsub = page.subscribe((p) => (missionId = p.params.id));
+  const unsub = page.subscribe((p) => (missionId = p.params.id ?? ''));
   onDestroy(unsub);
 
   let findingsSummary = $state('');

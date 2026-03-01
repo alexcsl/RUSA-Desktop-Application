@@ -30,7 +30,9 @@ use crate::{
 
 // ── Scientist roles ───────────────────────────────────────────────────────────
 
+#[allow(dead_code)]
 const SCIENTIST_ROLES: &[Role] = &[Role::Mathematician, Role::Physicist, Role::Chemist, Role::Biologist];
+#[allow(dead_code)]
 const EXPERIMENT_ROLES: &[Role] = &[Role::Physicist, Role::Chemist, Role::Biologist];
 
 // ── Structs ───────────────────────────────────────────────────────────────────
@@ -920,7 +922,7 @@ pub async fn get_archive(
     state: State<'_, AppState>,
     archive_type: String,
 ) -> Result<Vec<ArchiveItem>, AppError> {
-    let user = crate::require_auth_any!(state, [
+    let _user = crate::require_auth_any!(state, [
         Role::Mathematician, Role::Physicist, Role::Chemist, Role::Biologist
     ]);
 

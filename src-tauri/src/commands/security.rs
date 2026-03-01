@@ -14,6 +14,7 @@
 //     UC-SS-02: Security Inter-Team Communication       (sec_send_security_message, sec_get_security_messages)
 
 use chrono::{DateTime, NaiveDate, Utc};
+use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use tauri::State;
@@ -25,8 +26,28 @@ use crate::{
     state::{AppState, Role},
 };
 
+// ── Cache TTL constants ────────────────────────────────────────────────────────
+#[allow(dead_code)]
+const SECURITY_INCIDENTS_TTL: u64 = 300;  // 5 minutes
+#[allow(dead_code)]
+const SECURITY_PERSONNEL_TTL: u64 = 3600; // 1 hour
+#[allow(dead_code)]
+const SECURITY_DAILY_TTL: u64 = 300;      // 5 minutes
+#[allow(dead_code)]
+const SECURITY_BROADCASTS_TTL: u64 = 300; // 5 minutes
+#[allow(dead_code)]
+const SECURITY_MESSAGES_TTL: u64 = 120;   // 2 minutes
+
+/// Invalidates a Redis cache key, ignoring errors (cache is best-effort).
+async fn invalidate_cache(state: &State<'_, AppState>, key: &str) {
+    if let Ok(mut conn) = state.redis_client.get_multiplexed_async_connection().await {
+        let _: Result<(), _> = conn.del(key).await;
+    }
+}
+
 // ── Role sets ─────────────────────────────────────────────────────────────────
 
+#[allow(dead_code)]
 const ALL_SECURITY_ROLES: [Role; 2] = [
     Role::GalacticSecurityHead,
     Role::GalacticSecurityStaff,
@@ -236,6 +257,9 @@ pub async fn sec_create_incident_report(
     )
     .await?;
 
+    // Invalidate incident archive cache so next read gets fresh data
+    invalidate_cache(&state, "security_incidents").await;
+
     // If staff created the report, notify the Security Head
     if user.role == Role::GalacticSecurityStaff {
         let heads: Vec<(Uuid,)> = sqlx::query_as(
@@ -268,6 +292,7 @@ pub async fn sec_create_incident_report(
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /// Returns all incident reports visible to the current security user.
+/// Cached in Redis for 5 minutes; invalidated on every create/assign mutation.
 ///
 /// **Access:** GalacticSecurityHead, GalacticSecurityStaff
 #[tauri::command]
@@ -277,6 +302,17 @@ pub async fn sec_get_incident_archive(
     let _user = crate::require_auth_any!(state, [
         Role::GalacticSecurityHead, Role::GalacticSecurityStaff
     ]);
+
+    const CACHE_KEY: &str = "security_incidents";
+
+    // Try Redis cache first
+    if let Ok(mut conn) = state.redis_client.get_multiplexed_async_connection().await {
+        if let Ok(cached) = conn.get::<_, String>(CACHE_KEY).await {
+            if let Ok(parsed) = serde_json::from_str::<Vec<IncidentReportSummary>>(&cached) {
+                return Ok(parsed);
+            }
+        }
+    }
 
     let rows = sqlx::query_as::<_, IncidentReportSummary>(
         r#"
@@ -295,6 +331,13 @@ pub async fn sec_get_incident_archive(
     )
     .fetch_all(&state.db_pool)
     .await?;
+
+    // Populate cache
+    if let Ok(json) = serde_json::to_string(&rows) {
+        if let Ok(mut conn) = state.redis_client.get_multiplexed_async_connection().await {
+            let _: Result<(), _> = conn.set_ex(CACHE_KEY, &json, SECURITY_INCIDENTS_TTL).await;
+        }
+    }
 
     Ok(rows)
 }
@@ -359,6 +402,9 @@ pub async fn sec_assign_staff_to_incident(
         })),
     )
     .await?;
+
+    // Invalidate incident archive cache
+    invalidate_cache(&state, "security_incidents").await;
 
     // Notify the assigned staff
     let _ = sqlx::query(
@@ -454,6 +500,9 @@ pub async fn sec_submit_daily_report(
         .await;
     }
 
+    // Invalidate this user's daily-report cache
+    invalidate_cache(&state, &format!("security_daily_reports:{}", user.id)).await;
+
     Ok(row.0)
 }
 
@@ -529,6 +578,9 @@ pub async fn sec_submit_broadcast_request(
         .await;
     }
 
+    // Invalidate this user's broadcast-request cache
+    invalidate_cache(&state, &format!("security_broadcasts:{}", user.id)).await;
+
     Ok(row.0)
 }
 
@@ -537,6 +589,7 @@ pub async fn sec_submit_broadcast_request(
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /// Returns broadcast requests submitted by the current user (security type).
+/// Cached in Redis for 5 minutes per user; invalidated on new submission.
 ///
 /// **Access:** GalacticSecurityHead, GalacticSecurityStaff
 #[tauri::command]
@@ -546,6 +599,17 @@ pub async fn sec_get_my_broadcast_requests(
     let user = crate::require_auth_any!(state, [
         Role::GalacticSecurityHead, Role::GalacticSecurityStaff
     ]);
+
+    let cache_key = format!("security_broadcasts:{}", user.id);
+
+    // Try Redis cache first
+    if let Ok(mut conn) = state.redis_client.get_multiplexed_async_connection().await {
+        if let Ok(cached) = conn.get::<_, String>(&cache_key).await {
+            if let Ok(parsed) = serde_json::from_str::<Vec<SecBroadcastRequestSummary>>(&cached) {
+                return Ok(parsed);
+            }
+        }
+    }
 
     let rows = sqlx::query_as::<_, SecBroadcastRequestSummary>(
         r#"
@@ -563,6 +627,13 @@ pub async fn sec_get_my_broadcast_requests(
     .bind(user.id)
     .fetch_all(&state.db_pool)
     .await?;
+
+    // Populate cache
+    if let Ok(json) = serde_json::to_string(&rows) {
+        if let Ok(mut conn) = state.redis_client.get_multiplexed_async_connection().await {
+            let _: Result<(), _> = conn.set_ex(&cache_key, &json, SECURITY_BROADCASTS_TTL).await;
+        }
+    }
 
     Ok(rows)
 }
@@ -648,10 +719,17 @@ pub async fn sec_send_security_message(
     )
     .await?;
 
+    // Invalidate security messages cache for all involved parties
+    invalidate_cache(&state, &format!("sec_messages:{}", user.id)).await;
+    for uid in &payload.recipients_to {
+        invalidate_cache(&state, &format!("sec_messages:{}", uid)).await;
+    }
+
     Ok(msg_id)
 }
 
 /// Get all security-channel messages visible to the current security user.
+/// Cached in Redis for 2 minutes per user; invalidated on send.
 ///
 /// **Access:** GalacticSecurityHead, GalacticSecurityStaff
 #[tauri::command]
@@ -661,6 +739,17 @@ pub async fn sec_get_security_messages(
     let user = crate::require_auth_any!(state, [
         Role::GalacticSecurityHead, Role::GalacticSecurityStaff
     ]);
+
+    let cache_key = format!("sec_messages:{}", user.id);
+
+    // Try Redis cache first
+    if let Ok(mut conn) = state.redis_client.get_multiplexed_async_connection().await {
+        if let Ok(cached) = conn.get::<_, String>(&cache_key).await {
+            if let Ok(parsed) = serde_json::from_str::<Vec<SecMessageSummary>>(&cached) {
+                return Ok(parsed);
+            }
+        }
+    }
 
     let messages = sqlx::query_as::<_, SecMessageSummary>(
         r#"
@@ -679,6 +768,13 @@ pub async fn sec_get_security_messages(
     .fetch_all(&state.db_pool)
     .await?;
 
+    // Populate cache
+    if let Ok(json) = serde_json::to_string(&messages) {
+        if let Ok(mut conn) = state.redis_client.get_multiplexed_async_connection().await {
+            let _: Result<(), _> = conn.set_ex(&cache_key, &json, SECURITY_MESSAGES_TTL).await;
+        }
+    }
+
     Ok(messages)
 }
 
@@ -688,6 +784,7 @@ pub async fn sec_get_security_messages(
 
 /// Returns all active security personnel (both Head and Staff) + The Guardian.
 /// Used for messaging recipient picker and staff assignment.
+/// Cached in Redis for 1 hour; invalidated when user accounts are created/terminated.
 ///
 /// **Access:** GalacticSecurityHead, GalacticSecurityStaff
 #[tauri::command]
@@ -697,6 +794,17 @@ pub async fn sec_get_security_personnel(
     let _user = crate::require_auth_any!(state, [
         Role::GalacticSecurityHead, Role::GalacticSecurityStaff
     ]);
+
+    const CACHE_KEY: &str = "security_personnel";
+
+    // Try Redis cache first
+    if let Ok(mut conn) = state.redis_client.get_multiplexed_async_connection().await {
+        if let Ok(cached) = conn.get::<_, String>(CACHE_KEY).await {
+            if let Ok(parsed) = serde_json::from_str::<Vec<SecurityPersonnelItem>>(&cached) {
+                return Ok(parsed);
+            }
+        }
+    }
 
     let rows = sqlx::query_as::<_, SecurityPersonnelItem>(
         r#"
@@ -712,6 +820,13 @@ pub async fn sec_get_security_personnel(
     .fetch_all(&state.db_pool)
     .await?;
 
+    // Populate cache
+    if let Ok(json) = serde_json::to_string(&rows) {
+        if let Ok(mut conn) = state.redis_client.get_multiplexed_async_connection().await {
+            let _: Result<(), _> = conn.set_ex(CACHE_KEY, &json, SECURITY_PERSONNEL_TTL).await;
+        }
+    }
+
     Ok(rows)
 }
 
@@ -720,6 +835,7 @@ pub async fn sec_get_security_personnel(
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /// Returns daily security reports submitted by the current user.
+/// Cached in Redis for 5 minutes per user; invalidated on new submission.
 ///
 /// **Access:** GalacticSecurityHead
 #[tauri::command]
@@ -727,6 +843,17 @@ pub async fn sec_get_my_daily_reports(
     state: State<'_, AppState>,
 ) -> Result<Vec<DailySecurityReportSummary>, AppError> {
     let user = crate::require_auth_any!(state, [Role::GalacticSecurityHead]);
+
+    let cache_key = format!("security_daily_reports:{}", user.id);
+
+    // Try Redis cache first
+    if let Ok(mut conn) = state.redis_client.get_multiplexed_async_connection().await {
+        if let Ok(cached) = conn.get::<_, String>(&cache_key).await {
+            if let Ok(parsed) = serde_json::from_str::<Vec<DailySecurityReportSummary>>(&cached) {
+                return Ok(parsed);
+            }
+        }
+    }
 
     let rows = sqlx::query_as::<_, DailySecurityReportSummary>(
         r#"
@@ -743,6 +870,13 @@ pub async fn sec_get_my_daily_reports(
     .bind(user.id)
     .fetch_all(&state.db_pool)
     .await?;
+
+    // Populate cache
+    if let Ok(json) = serde_json::to_string(&rows) {
+        if let Ok(mut conn) = state.redis_client.get_multiplexed_async_connection().await {
+            let _: Result<(), _> = conn.set_ex(&cache_key, &json, SECURITY_DAILY_TTL).await;
+        }
+    }
 
     Ok(rows)
 }

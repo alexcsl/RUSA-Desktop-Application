@@ -30,6 +30,7 @@ use crate::{
 
 // ── Engineer roles ────────────────────────────────────────────────────────────
 
+#[allow(dead_code)]
 const ENGINEER_ROLES: &[Role] = &[Role::AgriculturalEngineer, Role::BiologicalEngineer];
 
 // ── Structs ───────────────────────────────────────────────────────────────────
@@ -959,18 +960,19 @@ pub async fn eng_get_species_archive(
                 vec![]
             })
         } else {
-            // For plant scope, use a simpler filter — include all species type entries
-            // When taxonomy data exists, filter to plant kingdom; otherwise show all
+            // For plant scope, filter to Plantae kingdom via JSONB taxonomy
             sqlx::query_as::<_, SpeciesArchiveRow>(
                 r#"
                 SELECT id, type, name, classification, detail, experiment_id, created_at
                 FROM science_archive
                 WHERE type = 'species' AND deleted_at IS NULL
+                  AND (detail->>'taxonomy')::jsonb->>'kingdom' = 'Plantae'
                 ORDER BY name
                 "#,
             )
             .fetch_all(&state.db_pool)
-            .await?
+            .await
+            .unwrap_or_else(|_| vec![])
         }
     } else {
         // Biological: all species

@@ -5,6 +5,8 @@ pub mod audit;
 pub mod auth;
 pub mod commands;
 pub mod error;
+pub mod realtime;
+pub mod reminders;
 pub mod state;
 
 use commands::administrator::{
@@ -187,6 +189,18 @@ pub fn run() {
                         .expect("Failed to generate Supabase service_role JWT from SUPABASE_SERVICE_KEY")
                 };
 
+                // ── Supabase Realtime ──────────────────────────────────────
+                // Used for the Observer + Event patterns:
+                //   notifications → EVENT_NOTIFICATION_NEW
+                //   vote_sessions → EVENT_VOTE_UPDATED
+                //   messages      → EVENT_MESSAGE_NEW
+                //
+                // SUPABASE_URL  — base project URL, e.g. https://xyz.supabase.co
+                // SUPABASE_ANON_KEY — public anon key (safe to use in desktop apps;
+                //   RLS policies on Supabase enforce row-level security).
+                let supabase_url = std::env::var("SUPABASE_URL").unwrap_or_default();
+                let supabase_anon_key = std::env::var("SUPABASE_ANON_KEY").unwrap_or_default();
+
                 // ── Manage AppState singleton ──────────────────────────────
                 app.manage(AppState {
                     current_user: tokio::sync::Mutex::new(None),
@@ -195,6 +209,33 @@ pub fn run() {
                     supabase_storage_url,
                     supabase_service_jwt,
                 });
+
+                // ── Spawn Supabase Realtime subscriber ─────────────────────
+                // Runs as a persistent background tokio task. Connects to the
+                // Supabase Realtime WebSocket and emits Tauri events to Svelte
+                // whenever watched tables change. Reconnects automatically.
+                if !supabase_url.is_empty() && !supabase_anon_key.is_empty() {
+                    let handle = app.handle().clone();
+                    tauri::async_runtime::spawn(
+                        crate::realtime::run_realtime_subscriber(
+                            handle,
+                            supabase_url,
+                            supabase_anon_key,
+                        )
+                    );
+                }
+
+                // ── Spawn sub-quorum voting reminder task ───────────────────
+                // Fires every 15 minutes to notify Directors who haven't voted
+                // on open sessions that are still below quorum.
+                // Rule: 00_MASTER_GUIDE.md §6 "15-minute push reminders"
+                {
+                    let handle = app.handle().clone();
+                    let pool = app.state::<AppState>().db_pool.clone();
+                    tauri::async_runtime::spawn(
+                        crate::reminders::run_voting_reminders(handle, pool)
+                    );
+                }
             });
 
             Ok(())

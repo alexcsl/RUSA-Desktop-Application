@@ -35,7 +35,7 @@ pub struct SubmitDataRequestPayload {
     pub sensitivity_note: Option<String>,
 }
 
-#[derive(Debug, Serialize, FromRow)]
+#[derive(Debug, Serialize, Deserialize, FromRow)]
 pub struct DataRequest {
     pub id: Uuid,
     pub requested_by: Uuid,
@@ -229,6 +229,23 @@ pub async fn get_data_request_detail(
 ) -> Result<DataRequest, AppError> {
     let user = crate::auth::get_current_user(&state).await?;
 
+    // Check Redis cache first
+    let cache_key = format!("data_request:status:{}", request_id);
+    if let Ok(mut conn) = state.redis_client.get_multiplexed_async_connection().await {
+        if let Ok(cached) = conn.get::<_, String>(&cache_key).await {
+            if let Ok(parsed) = serde_json::from_str::<DataRequest>(&cached) {
+                // Still enforce access control on cached data
+                let is_requester = parsed.requested_by == user.id;
+                let is_analyst = user.role == Role::DataAnalyst;
+                let is_stat_or_admin =
+                    user.role == Role::TheStatistician || user.role == Role::Administrator;
+                if is_requester || is_analyst || is_stat_or_admin {
+                    return Ok(parsed);
+                }
+            }
+        }
+    }
+
     let request = sqlx::query_as::<_, DataRequest>(
         r#"
         SELECT dr.id, dr.requested_by, u.full_name AS requester_name,
@@ -253,6 +270,13 @@ pub async fn get_data_request_detail(
 
     if !is_requester && !is_analyst && !is_stat_or_admin {
         return Err(AppError::Forbidden);
+    }
+
+    // Cache for 5 minutes
+    if let Ok(mut conn) = state.redis_client.get_multiplexed_async_connection().await {
+        if let Ok(json) = serde_json::to_string(&request) {
+            let _: Result<(), _> = conn.set_ex(&cache_key, &json, 300).await;
+        }
     }
 
     Ok(request)

@@ -35,6 +35,7 @@ use crate::{
 
 // ── Shared sanitary role sets ─────────────────────────────────────────────────
 
+#[allow(dead_code)]
 const SANITARY_ALL_ROLES: [Role; 6] = [
     Role::HeadOfSanitary,
     Role::InspectorCrew,

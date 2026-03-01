@@ -28,6 +28,7 @@ use crate::{
 
 // ── Shared medical role set ───────────────────────────────────────────────────
 
+#[allow(dead_code)]
 const MEDICAL_ROLES: [Role; 2] = [Role::MedicalStaff, Role::HeadOfMedicine];
 
 // ── Payloads & Response Types ─────────────────────────────────────────────────

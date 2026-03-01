@@ -48,6 +48,7 @@ use crate::{
 
 // ── Role sets ─────────────────────────────────────────────────────────────────
 
+#[allow(dead_code)]
 const SETTLER_ROLES: [Role; 4] = [
     Role::SettlerCommander,
     Role::CivilEngineer,
@@ -55,6 +56,7 @@ const SETTLER_ROLES: [Role; 4] = [
     Role::TemporarySetter,
 ];
 
+#[allow(dead_code)]
 const PERMANENT_SETTLER_ROLES: [Role; 3] = [
     Role::SettlerCommander,
     Role::CivilEngineer,

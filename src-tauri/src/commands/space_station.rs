@@ -15,7 +15,7 @@
 //   Visitor (no auth required):
 //     UC-SSV-01: View Interactive Station Map           (sst_get_published_map)
 
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, Utc};
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;

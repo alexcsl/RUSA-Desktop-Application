@@ -11,7 +11,7 @@
 // - Administrator can override or terminate at any time
 // - Redis key: vote_state:{session_id} — no TTL, delete on close
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Datelike, NaiveDate, TimeZone, Timelike, Utc};
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
@@ -27,6 +27,37 @@ use crate::{
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const QUORUM_THRESHOLD: i64 = 8;
+const PENDING_VOTES_TTL: u64 = 30;  // 30 seconds — voting is near-real-time
+const VOTE_STATE_TTL: u64 = 300;    // 5 minutes for session detail cache
+
+/// Calculate the next scheduled voting window (11:00 AM or 7:00 PM UTC).
+/// Rule: sessions open at 11:00 and 19:00 daily (00_MASTER_GUIDE.md §6).
+///
+/// - Before 11:00 → opens at 11:00 today
+/// - 11:00–18:59 → opens at 19:00 today
+/// - 19:00 or later → opens at 11:00 tomorrow
+pub fn next_voting_window(now: DateTime<Utc>) -> DateTime<Utc> {
+    let hour = now.hour();
+    let today: NaiveDate = now.date_naive();
+
+    let naive_dt = if hour < 11 {
+        today.and_hms_opt(11, 0, 0).unwrap()
+    } else if hour < 19 {
+        today.and_hms_opt(19, 0, 0).unwrap()
+    } else {
+        let tomorrow = today.succ_opt().unwrap_or(today);
+        tomorrow.and_hms_opt(11, 0, 0).unwrap()
+    };
+
+    Utc.from_utc_datetime(&naive_dt)
+}
+
+/// Invalidate the shared pending-votes listing cache.
+async fn invalidate_pending_votes_cache(state: &State<'_, AppState>) {
+    if let Ok(mut conn) = state.redis_client.get_multiplexed_async_connection().await {
+        let _: Result<(), _> = conn.del("pending_votes").await;
+    }
+}
 
 // ── Payloads & Response Structs ───────────────────────────────────────────────
 
@@ -50,7 +81,7 @@ pub struct AdminOverridePayload {
     pub reason: String,
 }
 
-#[derive(Debug, Serialize, FromRow)]
+#[derive(Debug, Serialize, Deserialize, FromRow)]
 pub struct VoteSessionSummary {
     pub id: Uuid,
     pub topic: String,
@@ -67,7 +98,7 @@ pub struct VoteSessionSummary {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Serialize, FromRow)]
+#[derive(Debug, Serialize, Deserialize, FromRow)]
 pub struct VoteSessionDetail {
     pub id: Uuid,
     pub topic: String,
@@ -88,7 +119,7 @@ pub struct VoteSessionDetail {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Serialize, FromRow)]
+#[derive(Debug, Serialize, Deserialize, FromRow)]
 pub struct VoteRecord {
     pub id: Uuid,
     pub session_id: Uuid,
@@ -99,14 +130,14 @@ pub struct VoteRecord {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct VoteSessionWithRecords {
     pub session: VoteSessionDetail,
     pub records: Vec<VoteRecordWithName>,
     pub my_vote: Option<VoteRecord>,
 }
 
-#[derive(Debug, Serialize, FromRow)]
+#[derive(Debug, Serialize, Deserialize, FromRow)]
 pub struct VoteRecordWithName {
     pub id: Uuid,
     pub director_id: Uuid,
@@ -154,21 +185,29 @@ pub async fn cast_vote(
         return Err(AppError::Internal("A written reason is required.".into()));
     }
 
-    // 1. Verify session is open
-    let session_status: Option<(String,)> = sqlx::query_as(
-        "SELECT status FROM vote_sessions WHERE id = $1 AND deleted_at IS NULL",
+    // 1. Verify session is open and the voting window has started
+    let session_info: Option<(String, DateTime<Utc>)> = sqlx::query_as(
+        "SELECT status, opens_at FROM vote_sessions WHERE id = $1 AND deleted_at IS NULL",
     )
     .bind(payload.session_id)
     .fetch_optional(&state.db_pool)
     .await?;
 
-    let (status,) = session_status
+    let (status, opens_at) = session_info
         .ok_or_else(|| AppError::Internal("Vote session not found.".into()))?;
 
     if status != "open" && status != "quorum_pending" {
         return Err(AppError::Internal(
             "This voting session is no longer accepting votes.".into(),
         ));
+    }
+
+    // Enforce session window: votes cannot be cast before opens_at.
+    if Utc::now() < opens_at {
+        return Err(AppError::Internal(format!(
+            "Voting window has not opened yet. Session opens at {}.",
+            opens_at.format("%Y-%m-%d %H:%M UTC")
+        )));
     }
 
     // 2. Check director hasn't already voted
@@ -284,6 +323,7 @@ pub async fn cast_vote(
 
     // 7. Invalidate Redis cache
     invalidate_vote_cache(&state, payload.session_id).await;
+    invalidate_pending_votes_cache(&state).await;
 
     Ok(())
 }
@@ -383,6 +423,7 @@ pub async fn change_vote(
 
     // 6. Invalidate cache
     invalidate_vote_cache(&state, payload.session_id).await;
+    invalidate_pending_votes_cache(&state).await;
 
     Ok(())
 }
@@ -390,6 +431,7 @@ pub async fn change_vote(
 // ── Get Pending Vote Sessions ─────────────────────────────────────────────────
 
 /// List all open/quorum-pending vote sessions for the current Director.
+/// Cached in Redis for 30 seconds; invalidated on every vote cast/change/admin action.
 ///
 /// **Access:** Any Director or Administrator.
 #[tauri::command]
@@ -397,6 +439,17 @@ pub async fn get_pending_votes(
     state: State<'_, AppState>,
 ) -> Result<Vec<VoteSessionSummary>, AppError> {
     let _user = crate::require_auth_director!(state);
+
+    const CACHE_KEY: &str = "pending_votes";
+
+    // Try Redis cache first (short TTL — voting is near real-time)
+    if let Ok(mut conn) = state.redis_client.get_multiplexed_async_connection().await {
+        if let Ok(cached) = conn.get::<_, String>(CACHE_KEY).await {
+            if let Ok(parsed) = serde_json::from_str::<Vec<VoteSessionSummary>>(&cached) {
+                return Ok(parsed);
+            }
+        }
+    }
 
     let sessions = sqlx::query_as::<_, VoteSessionSummary>(
         r#"
@@ -412,6 +465,13 @@ pub async fn get_pending_votes(
     .fetch_all(&state.db_pool)
     .await?;
 
+    // Populate cache
+    if let Ok(json) = serde_json::to_string(&sessions) {
+        if let Ok(mut conn) = state.redis_client.get_multiplexed_async_connection().await {
+            let _: Result<(), _> = conn.set_ex(CACHE_KEY, &json, PENDING_VOTES_TTL).await;
+        }
+    }
+
     Ok(sessions)
 }
 
@@ -419,6 +479,7 @@ pub async fn get_pending_votes(
 
 /// Get full detail for a specific vote session, including all vote records.
 /// Vote records show director names only after the session is decided/closed.
+/// Concluded sessions are cached in Redis (they are immutable once closed).
 ///
 /// **Access:** Any Director or Administrator.
 #[tauri::command]
@@ -427,6 +488,29 @@ pub async fn get_vote_session_detail(
     session_id: Uuid,
 ) -> Result<VoteSessionWithRecords, AppError> {
     let user = crate::require_auth_director!(state);
+
+    // Try Redis cache for concluded sessions (immutable once closed)
+    let cache_key = format!("vote_state:{}", session_id);
+    if let Ok(mut conn) = state.redis_client.get_multiplexed_async_connection().await {
+        if let Ok(cached) = conn.get::<_, String>(&cache_key).await {
+            if let Ok(parsed) = serde_json::from_str::<VoteSessionWithRecords>(&cached) {
+                // Ensure the cached result's my_vote is replaced with live data for the current user
+                let live_my_vote = sqlx::query_as::<_, VoteRecord>(
+                    "SELECT id, session_id, director_id, vote, reason, changed_at, created_at FROM vote_records WHERE session_id = $1 AND director_id = $2",
+                )
+                .bind(session_id)
+                .bind(user.id)
+                .fetch_optional(&state.db_pool)
+                .await
+                .unwrap_or(None);
+                return Ok(VoteSessionWithRecords {
+                    session: parsed.session,
+                    records: parsed.records,
+                    my_vote: live_my_vote,
+                });
+            }
+        }
+    }
 
     let session = sqlx::query_as::<_, VoteSessionDetail>(
         r#"
@@ -481,11 +565,27 @@ pub async fn get_vote_session_detail(
     .fetch_optional(&state.db_pool)
     .await?;
 
-    Ok(VoteSessionWithRecords {
+    let result = VoteSessionWithRecords {
         session,
         records,
         my_vote,
-    })
+    };
+
+    // Cache concluded sessions — they are immutable once closed
+    let is_concluded = matches!(
+        result.session.status.as_str(),
+        "decided" | "overridden" | "terminated" | "closed"
+    );
+    if is_concluded {
+        if let Ok(json) = serde_json::to_string(&result) {
+            if let Ok(mut conn) = state.redis_client.get_multiplexed_async_connection().await {
+                let cache_key = format!("vote_state:{}", session_id);
+                let _: Result<(), _> = conn.set_ex(&cache_key, &json, VOTE_STATE_TTL).await;
+            }
+        }
+    }
+
+    Ok(result)
 }
 
 // ── Get All Vote Sessions (history) ───────────────────────────────────────────
@@ -532,9 +632,10 @@ pub async fn initiate_ad_hoc_vote(
         return Err(AppError::Internal("Vote topic cannot be empty.".into()));
     }
 
-    // Determine next voting window (11:00 or 19:00)
+    // Schedule for the next voting window (11:00 AM or 7:00 PM UTC).
+    // Ad-hoc votes follow the same timing rule as request-driven votes.
     let now = Utc::now();
-    let opens_at = now; // For ad-hoc votes, open immediately
+    let opens_at = next_voting_window(now);
 
     let session_id: (Uuid,) = sqlx::query_as(
         r#"
@@ -696,6 +797,7 @@ pub async fn admin_override_vote(
 
     // Invalidate cache
     invalidate_vote_cache(&state, payload.session_id).await;
+    invalidate_pending_votes_cache(&state).await;
 
     Ok(())
 }
@@ -766,6 +868,7 @@ pub async fn admin_terminate_vote(
     .await?;
 
     invalidate_vote_cache(&state, session_id).await;
+    invalidate_pending_votes_cache(&state).await;
 
     Ok(())
 }

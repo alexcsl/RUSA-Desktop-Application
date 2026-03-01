@@ -431,6 +431,7 @@ pub async fn get_inbox(
             LEFT JOIN message_recipients mr ON mr.message_id = m.id AND mr.user_id = $1
             WHERE m.channel = $2
               AND m.deleted_at IS NULL
+              AND (m.scheduled_at IS NULL OR m.scheduled_at <= NOW())
             ORDER BY m.created_at DESC
             LIMIT 200
             "#,
@@ -450,6 +451,7 @@ pub async fn get_inbox(
             JOIN message_recipients mr ON mr.message_id = m.id AND mr.user_id = $1
             WHERE m.channel = $2
               AND m.deleted_at IS NULL
+              AND (m.scheduled_at IS NULL OR m.scheduled_at <= NOW())
             ORDER BY m.created_at DESC
             LIMIT 200
             "#,
