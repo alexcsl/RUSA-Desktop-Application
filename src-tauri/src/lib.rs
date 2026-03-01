@@ -105,6 +105,16 @@ use commands::settlers::{
     stl_submit_commander_anomaly, stl_submit_commander_supply, stl_submit_complaint,
     stl_submit_construction_report, stl_submit_progress_report, stl_submit_supply_request,
 };
+use commands::psychiatry::{
+    psy_create_patient_record, psy_get_user_directory, psy_get_my_patients,
+    psy_get_patient_detail, psy_log_appointment, psy_get_appointments,
+    psy_update_recovery_log, psy_get_recovery_logs, psy_manage_schedule,
+    psy_get_schedule, psy_delete_schedule_slot, psy_get_patient_index,
+    psy_schedule_appointment, psy_request_schedule_access,
+    psy_assistant_get_patients, psy_assistant_get_recovery_log,
+    psy_assistant_get_schedule, psy_assistant_get_appointments,
+    psy_grant_schedule_access, psy_get_access_settings,
+};
 use commands::voting::{
     admin_override_vote, admin_terminate_vote, cast_vote, change_vote,
     get_pending_votes, get_vote_session_detail, get_vote_sessions,
@@ -443,6 +453,27 @@ pub fn run() {
             san_get_budget_requests,
             san_submit_expenditure_report,
             san_get_expenditure_reports,
+            // Psychiatry Division subsystem (UC-PSY-01..05, UC-PA-01..04, UC-PAT-01)
+            psy_create_patient_record,
+            psy_get_user_directory,
+            psy_get_my_patients,
+            psy_get_patient_detail,
+            psy_log_appointment,
+            psy_get_appointments,
+            psy_update_recovery_log,
+            psy_get_recovery_logs,
+            psy_manage_schedule,
+            psy_get_schedule,
+            psy_delete_schedule_slot,
+            psy_get_patient_index,
+            psy_schedule_appointment,
+            psy_request_schedule_access,
+            psy_assistant_get_patients,
+            psy_assistant_get_recovery_log,
+            psy_assistant_get_schedule,
+            psy_assistant_get_appointments,
+            psy_grant_schedule_access,
+            psy_get_access_settings,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

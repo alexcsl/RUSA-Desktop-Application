@@ -5,6 +5,7 @@ pub mod directors;
 pub mod engineers;
 pub mod medical;
 pub mod messaging;
+pub mod psychiatry;
 pub mod sanitary;
 pub mod scientists;
 pub mod security;
