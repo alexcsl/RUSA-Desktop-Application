@@ -7,6 +7,11 @@ pub mod commands;
 pub mod error;
 pub mod state;
 
+use commands::administrator::{
+    admin_get_system_stats, admin_get_audit_log, admin_get_all_users,
+    admin_toggle_user_status, admin_reset_password, admin_get_recent_activity,
+    admin_get_roles, admin_get_base_locations,
+};
 use commands::astronauts::{
     ast_assign_mission, ast_get_all_missions, ast_get_all_status_reports,
     ast_get_colleague_counters, ast_get_completion_requests_taskmaster,
@@ -474,6 +479,15 @@ pub fn run() {
             psy_assistant_get_appointments,
             psy_grant_schedule_access,
             psy_get_access_settings,
+            // Administrator subsystem (UC-ADM-01..06 + system management)
+            admin_get_system_stats,
+            admin_get_audit_log,
+            admin_get_all_users,
+            admin_toggle_user_status,
+            admin_reset_password,
+            admin_get_recent_activity,
+            admin_get_roles,
+            admin_get_base_locations,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

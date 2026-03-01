@@ -191,7 +191,7 @@ BEGIN
      'Seal in lead-lined containment vessel. Transport to designated disposal bay via armored cart. Log serial number of each container.',
      'Full hazmat suit required. Two-person buddy system. Geiger counter reading before/after.',
      'Compliant with RUSA Regulation 14-B. Annual recertification required.',
-     '[{"revision":1,"changed_by":"' || v_disposal1 || '","changed_at":"2025-12-01T10:00:00Z","summary":"Initial creation"}]'::jsonb,
+     ('[{"revision":1,"changed_by":"' || v_disposal1 || '","changed_at":"2025-12-01T10:00:00Z","summary":"Initial creation"}]')::jsonb,
      v_disposal1);
 
   -- ═══════════════════════════════════════════════════════════
@@ -204,7 +204,7 @@ BEGIN
      '["Step 1: Test pH levels of incoming waste stream","Step 2: Add neutralizing agent per dosage chart","Step 3: Allow 30-minute reaction period with agitation","Step 4: Re-test pH — must be between 6.5 and 8.5","Step 5: Route to clean water holding tank"]'::jsonb,
      'Chemical-resistant gloves and goggles required. Emergency shower within 10m.',
      'Meets RUSA Environmental Standard 22-C.',
-     '[{"revision":1,"changed_by":"' || v_wastewater1 || '","changed_at":"2025-11-15T14:00:00Z","summary":"Initial procedure draft"}]'::jsonb,
+     ('[{"revision":1,"changed_by":"' || v_wastewater1 || '","changed_at":"2025-11-15T14:00:00Z","summary":"Initial procedure draft"}]')::jsonb,
      v_wastewater1);
 
   -- ═══════════════════════════════════════════════════════════

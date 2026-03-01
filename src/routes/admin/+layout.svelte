@@ -130,6 +130,9 @@
   interface NavLink { label: string; href: string; }
 
   const navLinks: NavLink[] = [
+    { label: 'Dashboard', href: '/admin' },
+    { label: 'Personnel', href: '/admin/personnel' },
+    { label: 'Audit Log', href: '/admin/audit' },
     { label: 'Vote Management', href: '/admin/votes' },
     { label: 'Directors Votes', href: '/admin/directors-votes' },
     { label: 'Accounts', href: '/admin/accounts' },
