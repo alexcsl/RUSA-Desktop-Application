@@ -1,0 +1,15 @@
+pub mod administrator;
+pub mod astronauts;
+pub mod auth;
+pub mod data_analysts;
+pub mod directors;
+pub mod engineers;
+pub mod medical;
+pub mod messaging;
+pub mod psychiatry;
+pub mod sanitary;
+pub mod scientists;
+pub mod security;
+pub mod settlers;
+pub mod space_station;
+pub mod voting;

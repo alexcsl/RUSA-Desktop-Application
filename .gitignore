@@ -1,10 +1,20 @@
-.DS_Store
-node_modules
-/build
-/.svelte-kit
-/package
+# Dependencies
+node_modules/
+.svelte-kit/
+rusa/node_modules/
+rusa/.svelte-kit/
+
+# Environment
 .env
-.env.*
-!.env.example
-vite.config.js.timestamp-*
-vite.config.ts.timestamp-*
+rusa/.env
+
+# Rust build
+rusa/src-tauri/target/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
