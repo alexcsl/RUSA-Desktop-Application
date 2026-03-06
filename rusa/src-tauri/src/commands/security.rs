@@ -28,7 +28,7 @@ use crate::{
 
 // ── Cache TTL constants ────────────────────────────────────────────────────────
 #[allow(dead_code)]
-const SECURITY_INCIDENTS_TTL: u64 = 300;  // 5 minutes
+const SECURITY_INCIDENTS_TTL: u64 = 600;  // 10 minutes
 #[allow(dead_code)]
 const SECURITY_PERSONNEL_TTL: u64 = 3600; // 1 hour
 #[allow(dead_code)]

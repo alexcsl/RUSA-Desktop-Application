@@ -76,7 +76,7 @@ pub struct GrantAccessPayload {
 
 // ── Response types ─────────────────────────────────────────────────────────────
 
-#[derive(Debug, Serialize, FromRow)]
+#[derive(Debug, Serialize, Deserialize, FromRow)]
 pub struct PatientSummary {
     pub id: Uuid,
     pub user_id: Uuid,
@@ -130,7 +130,7 @@ pub struct RecoveryLogEntry {
     pub logged_by: Option<Uuid>,
 }
 
-#[derive(Debug, Serialize, FromRow)]
+#[derive(Debug, Serialize, Deserialize, FromRow)]
 pub struct ScheduleSlot {
     pub id: Uuid,
     pub psychiatrist_id: Uuid,
@@ -158,7 +158,7 @@ pub struct PatientListEntry {
     pub care_status: String,
 }
 
-#[derive(Debug, Serialize, FromRow)]
+#[derive(Debug, Serialize, Deserialize, FromRow)]
 pub struct AccessSetting {
     pub assistant_id: Uuid,
     pub assistant_name: String,
@@ -311,6 +311,16 @@ pub async fn psy_get_my_patients(
     let user = crate::require_auth_any!(state, [Role::Psychiatrist, Role::Administrator]);
     let pool = &state.db_pool;
 
+    // Check Redis cache (15 min TTL)
+    let cache_key = format!("patient_list:{}", user.id);
+    if let Ok(mut conn) = state.redis_client.get_multiplexed_async_connection().await {
+        if let Ok(cached) = conn.get::<_, String>(&cache_key).await {
+            if let Ok(items) = serde_json::from_str::<Vec<PatientSummary>>(&cached) {
+                return Ok(items);
+            }
+        }
+    }
+
     let rows = sqlx::query_as::<_, PatientSummary>(
         r#"SELECT pp.id, pp.user_id, u.full_name AS patient_name,
                   COALESCE(pi.care_status, 'active') AS care_status,
@@ -324,6 +334,13 @@ pub async fn psy_get_my_patients(
     .bind(user.id)
     .fetch_all(pool)
     .await?;
+
+    // Populate cache — 15 minutes
+    if let Ok(mut conn) = state.redis_client.get_multiplexed_async_connection().await {
+        if let Ok(json) = serde_json::to_string(&rows) {
+            let _: Result<(), _> = conn.set_ex(&cache_key, &json, 900).await;
+        }
+    }
 
     Ok(rows)
 }
@@ -582,6 +599,16 @@ pub async fn psy_get_schedule(
     let user = crate::require_auth_any!(state, [Role::Psychiatrist, Role::Administrator]);
     let pool = &state.db_pool;
 
+    // Check Redis cache (30 min TTL)
+    let cache_key = format!("psychiatrist_schedule:{}", user.id);
+    if let Ok(mut conn) = state.redis_client.get_multiplexed_async_connection().await {
+        if let Ok(cached) = conn.get::<_, String>(&cache_key).await {
+            if let Ok(items) = serde_json::from_str::<Vec<ScheduleSlot>>(&cached) {
+                return Ok(items);
+            }
+        }
+    }
+
     let rows = sqlx::query_as::<_, ScheduleSlot>(
         r#"SELECT id, psychiatrist_id, slot_start, slot_end, is_available, blocked_reason
            FROM psychiatrist_schedule
@@ -591,6 +618,13 @@ pub async fn psy_get_schedule(
     .bind(user.id)
     .fetch_all(pool)
     .await?;
+
+    // Populate cache — 30 minutes
+    if let Ok(mut conn) = state.redis_client.get_multiplexed_async_connection().await {
+        if let Ok(json) = serde_json::to_string(&rows) {
+            let _: Result<(), _> = conn.set_ex(&cache_key, &json, 1800).await;
+        }
+    }
 
     Ok(rows)
 }
@@ -1010,6 +1044,16 @@ pub async fn psy_get_access_settings(
 
     let pool = &state.db_pool;
 
+    // Check Redis cache (1 hour TTL)
+    let cache_key = format!("schedule_access:{}", user_id);
+    if let Ok(mut conn) = state.redis_client.get_multiplexed_async_connection().await {
+        if let Ok(cached) = conn.get::<_, String>(&cache_key).await {
+            if let Ok(items) = serde_json::from_str::<Vec<AccessSetting>>(&cached) {
+                return Ok(items);
+            }
+        }
+    }
+
     let rows = sqlx::query_as::<_, AccessSetting>(
         r#"SELECT psa.assistant_id, u.full_name AS assistant_name,
                   psa.granted, psa.updated_at
@@ -1021,6 +1065,13 @@ pub async fn psy_get_access_settings(
     .bind(user_id)
     .fetch_all(pool)
     .await?;
+
+    // Populate cache — 1 hour
+    if let Ok(mut conn) = state.redis_client.get_multiplexed_async_connection().await {
+        if let Ok(json) = serde_json::to_string(&rows) {
+            let _: Result<(), _> = conn.set_ex(&cache_key, &json, 3600).await;
+        }
+    }
 
     Ok(rows)
 }

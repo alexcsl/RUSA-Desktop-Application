@@ -55,7 +55,7 @@ pub struct ManageInventoryPayload {
     pub unit: Option<String>,
 }
 
-#[derive(Debug, Serialize, FromRow)]
+#[derive(Debug, Serialize, Deserialize, FromRow)]
 pub struct InventoryItem {
     pub id: Uuid,
     pub station_id: Uuid,
@@ -129,7 +129,7 @@ pub struct AddAnnotationPayload {
     pub y_position: f64,
 }
 
-#[derive(Debug, Serialize, FromRow, Clone)]
+#[derive(Debug, Serialize, Deserialize, FromRow, Clone)]
 pub struct MapAnnotation {
     pub id: Uuid,
     pub map_id: Uuid,
@@ -139,7 +139,7 @@ pub struct MapAnnotation {
     pub y_position: f64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct PublishedMapData {
     pub signed_url: String,
     pub image_width: Option<f64>,
@@ -158,7 +158,7 @@ pub struct LogArrivalPayload {
     pub arrived_at: String,
 }
 
-#[derive(Debug, Serialize, FromRow)]
+#[derive(Debug, Serialize, Deserialize, FromRow)]
 pub struct PersonnelLogEntry {
     pub id: Uuid,
     pub station_id: Uuid,
@@ -524,6 +524,16 @@ pub async fn sst_get_inventory(
 ) -> Result<Vec<InventoryItem>, AppError> {
     let _user = crate::require_auth_any!(state, [Role::SpaceStationSettler, Role::Administrator]);
 
+    // Check Redis cache (15 min TTL)
+    let cache_key = format!("station_inventory:{}", station_id);
+    if let Ok(mut conn) = state.redis_client.get_multiplexed_async_connection().await {
+        if let Ok(cached) = conn.get::<_, String>(&cache_key).await {
+            if let Ok(items) = serde_json::from_str::<Vec<InventoryItem>>(&cached) {
+                return Ok(items);
+            }
+        }
+    }
+
     let items = sqlx::query_as::<_, InventoryItem>(
         r#"
         SELECT id, station_id, item_name, category, quantity, unit, updated_at
@@ -535,6 +545,13 @@ pub async fn sst_get_inventory(
     .bind(station_id)
     .fetch_all(&state.db_pool)
     .await?;
+
+    // Populate cache — 15 minutes
+    if let Ok(mut conn) = state.redis_client.get_multiplexed_async_connection().await {
+        if let Ok(json) = serde_json::to_string(&items) {
+            let _: Result<(), _> = conn.set_ex(&cache_key, &json, 900).await;
+        }
+    }
 
     Ok(items)
 }
@@ -971,6 +988,16 @@ pub async fn sst_get_published_map(
 ) -> Result<PublishedMapData, AppError> {
     // NO AUTH — public endpoint for visitors
 
+    // Check Redis cache (1 hour TTL)
+    let cache_key = format!("station_map:published:{}", station_id);
+    if let Ok(mut conn) = state.redis_client.get_multiplexed_async_connection().await {
+        if let Ok(cached) = conn.get::<_, String>(&cache_key).await {
+            if let Ok(data) = serde_json::from_str::<PublishedMapData>(&cached) {
+                return Ok(data);
+            }
+        }
+    }
+
     // Find the published map
     let map = sqlx::query_as::<_, StationMapSummary>(
         r#"
@@ -1048,13 +1075,22 @@ pub async fn sst_get_published_map(
         )
     };
 
-    Ok(PublishedMapData {
+    let result = PublishedMapData {
         signed_url,
         image_width: map.image_width,
         image_height: map.image_height,
         annotations,
         station_name: station_name.0,
-    })
+    };
+
+    // Populate cache — 1 hour (matches signed URL expiry)
+    if let Ok(mut conn) = state.redis_client.get_multiplexed_async_connection().await {
+        if let Ok(json) = serde_json::to_string(&result) {
+            let _: Result<(), _> = conn.set_ex(&cache_key, &json, 3600).await;
+        }
+    }
+
+    Ok(result)
 }
 
 // ════════════════════════════════════════════════════════════════════════════════
@@ -1181,6 +1217,19 @@ pub async fn sst_get_personnel(
 ) -> Result<Vec<PersonnelLogEntry>, AppError> {
     let _user = crate::require_auth_any!(state, [Role::SpaceStationSettler, Role::Administrator]);
 
+    // Check Redis cache (10 min TTL) — only for active personnel (default view)
+    let use_cache = !show_all.unwrap_or(false);
+    let cache_key = format!("station_personnel:{}", station_id);
+    if use_cache {
+        if let Ok(mut conn) = state.redis_client.get_multiplexed_async_connection().await {
+            if let Ok(cached) = conn.get::<_, String>(&cache_key).await {
+                if let Ok(items) = serde_json::from_str::<Vec<PersonnelLogEntry>>(&cached) {
+                    return Ok(items);
+                }
+            }
+        }
+    }
+
     let entries = if show_all.unwrap_or(false) {
         sqlx::query_as::<_, PersonnelLogEntry>(
             r#"
@@ -1206,6 +1255,15 @@ pub async fn sst_get_personnel(
         .fetch_all(&state.db_pool)
         .await?
     };
+
+    // Populate cache — 10 minutes (active personnel only)
+    if use_cache {
+        if let Ok(mut conn) = state.redis_client.get_multiplexed_async_connection().await {
+            if let Ok(json) = serde_json::to_string(&entries) {
+                let _: Result<(), _> = conn.set_ex(&cache_key, &json, 600).await;
+            }
+        }
+    }
 
     Ok(entries)
 }

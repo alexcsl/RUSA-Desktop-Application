@@ -955,6 +955,11 @@ pub async fn stl_reject_incoming(
             .bind(settlement_id)
             .execute(&state.db_pool)
             .await?;
+
+            // Invalidate anomaly cache on resolve
+            if let Ok(mut conn) = state.redis_client.get_multiplexed_async_connection().await {
+                let _: Result<(), _> = conn.del(format!("anomaly_reports:open:{}", settlement_id)).await;
+            }
         }
         "complaint" => {
             sqlx::query(
@@ -1098,6 +1103,11 @@ pub async fn stl_forward_to_directors(
             .bind(settlement_id)
             .execute(&state.db_pool)
             .await?;
+
+            // Invalidate anomaly cache on forward
+            if let Ok(mut conn) = state.redis_client.get_multiplexed_async_connection().await {
+                let _: Result<(), _> = conn.del(format!("anomaly_reports:open:{}", settlement_id)).await;
+            }
         }
         "complaint" => {
             sqlx::query(

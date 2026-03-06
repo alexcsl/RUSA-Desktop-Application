@@ -122,7 +122,7 @@ pub struct SpeciesArchiveRow {
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Serialize, FromRow)]
+#[derive(Debug, Serialize, Deserialize, FromRow)]
 pub struct EngExperimentSummary {
     pub id: Uuid,
     pub title: String,
@@ -1036,6 +1036,18 @@ pub async fn eng_get_experiment_archive(
 
     let exp_types = role_to_experiment_types(&user.role);
 
+    // Check Redis cache (30 min TTL) — only for unfiltered queries
+    let cache_key = format!("experiments:user:{}", user.id);
+    if status_filter.is_none() {
+        if let Ok(mut conn) = state.redis_client.get_multiplexed_async_connection().await {
+            if let Ok(cached) = conn.get::<_, String>(&cache_key).await {
+                if let Ok(items) = serde_json::from_str::<Vec<EngExperimentSummary>>(&cached) {
+                    return Ok(items);
+                }
+            }
+        }
+    }
+
     let experiments = if let Some(ref status) = status_filter {
         sqlx::query_as::<_, EngExperimentSummary>(
             r#"
@@ -1068,6 +1080,15 @@ pub async fn eng_get_experiment_archive(
         .fetch_all(&state.db_pool)
         .await?
     };
+
+    // Populate cache — 30 minutes (unfiltered only)
+    if status_filter.is_none() {
+        if let Ok(mut conn) = state.redis_client.get_multiplexed_async_connection().await {
+            if let Ok(json) = serde_json::to_string(&experiments) {
+                let _: Result<(), _> = conn.set_ex(&cache_key, &json, 1800).await;
+            }
+        }
+    }
 
     Ok(experiments)
 }

@@ -1543,6 +1543,18 @@ pub async fn decide_final_document(
     )
     .await?;
 
+    // Invalidate science_archive cache for this document type on approval
+    if payload.decision == "approved" {
+        if let Ok(mut conn) = state.redis_client.get_multiplexed_async_connection().await {
+            let _: Result<(), _> = conn.del(format!("science_archive:{}", doc_type)).await;
+            // Also invalidate species_archive caches used by engineers
+            if doc_type == "species" {
+                let _: Result<(), _> = conn.del("species_archive:plant").await;
+                let _: Result<(), _> = conn.del("species_archive:all_species").await;
+            }
+        }
+    }
+
     Ok(())
 }
 
