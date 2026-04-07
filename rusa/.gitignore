@@ -15,3 +15,7 @@ vite.config.ts.timestamp-*
 
 # Requirements / docs folder — never commit
 docs/
+
+# Visual Paradigm temp files
+*.lck
+Main.vpp.bak_*
