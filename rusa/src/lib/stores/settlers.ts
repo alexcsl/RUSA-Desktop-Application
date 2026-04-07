@@ -315,3 +315,95 @@ export async function stlLogFarmHealth(payload: {
 }): Promise<string> {
   return invoke('stl_log_farm_health', { payload });
 }
+
+// ── New view/report types ─────────────────────────────────────────────────────
+
+export interface ProgressReportRow {
+  id: string;
+  task_id: string;
+  task_title: string;
+  submitted_by_name: string;
+  week: string | null;
+  rag_status: string | null;
+  progress_made: string;
+  materials_equipment: string | null;
+  created_at: string;
+}
+
+export interface BuildingLogRow {
+  id: string;
+  building_name: string;
+  submitted_by_name: string;
+  check_date: string;
+  findings: string | null;
+  status: string;
+  created_at: string;
+}
+
+export interface FarmHealthRow {
+  id: string;
+  subject_type: string;
+  subject_name: string;
+  submitted_by_name: string;
+  log_date: string;
+  condition: string;
+  treatment: string | null;
+  notes: string | null;
+  created_at: string;
+}
+
+/** Commander: view all progress reports from settlers in this settlement */
+export async function stlGetProgressReports(): Promise<ProgressReportRow[]> {
+  return invoke('stl_get_progress_reports');
+}
+
+/** Commander + Civil Engineer: view building health logs */
+export async function stlGetBuildingLogs(): Promise<BuildingLogRow[]> {
+  return invoke('stl_get_building_logs');
+}
+
+/** Commander + Farmer: view farm health logs */
+export async function stlGetFarmHealthLogs(): Promise<FarmHealthRow[]> {
+  return invoke('stl_get_farm_health_logs');
+}
+
+/** Submit security incident report (SC/CE/Farmer) */
+export async function stlSubmitSecurityReport(payload: {
+  incident_type: string;
+  location: string;
+  description: string;
+  severity: string;
+  occurred_at?: string;
+  recommended_action?: string;
+}): Promise<string> {
+  return invoke('stl_submit_security_report', { payload });
+}
+
+// ── Dropdown helpers ──────────────────────────────────────────────────────────
+
+export interface AnomalyReportSummary {
+  id: string;
+  description: string;
+  category: string | null;
+  danger_level: string | null;
+  status: string;
+  created_at: string;
+}
+
+export interface ComplaintSummary {
+  id: string;
+  incident_description: string;
+  subject_name: string;
+  status: string;
+  created_at: string;
+}
+
+/** Commander: list anomaly reports for the abandonment dropdown */
+export async function stlListSettlementAnomalies(): Promise<AnomalyReportSummary[]> {
+  return invoke('stl_list_settlement_anomalies');
+}
+
+/** Commander: list settler complaints for the repatriation dropdown */
+export async function stlListSettlementComplaints(): Promise<ComplaintSummary[]> {
+  return invoke('stl_list_settlement_complaints');
+}

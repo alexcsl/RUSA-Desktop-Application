@@ -13,10 +13,10 @@
 
   let { children } = $props();
   let user: SessionUser | null = $state(null);
-  currentUser.subscribe((v) => (user = v));
+  const unsubUser = currentUser.subscribe((v) => (user = v));
 
   let pathVal = $state('');
-  page.subscribe((p) => (pathVal = p.url.pathname));
+  const unsubPage = page.subscribe((p) => (pathVal = p.url.pathname));
 
   let pendingRequests = $state(0);
   let pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -37,10 +37,12 @@
   });
 
   onDestroy(() => {
+    unsubUser();
+    unsubPage();
     if (pollTimer) clearInterval(pollTimer);
   });
 
-  interface NavLink { label: string; href: string; roles: string[]; }
+  interface NavLink { label: string; href: string; roles: string[]; exact?: boolean; }
 
   const navLinks: NavLink[] = [
     // Psychiatrist links
@@ -48,19 +50,26 @@
     { label: 'New Patient', href: '/psychiatry/patients/new', roles: ['Psychiatrist'] },
     { label: 'My Schedule', href: '/psychiatry/schedule', roles: ['Psychiatrist'] },
     { label: 'Patient Index', href: '/psychiatry/patient-index', roles: ['Psychiatrist'] },
+    { label: 'My Assistant', href: '/psychiatry/my-assistant', roles: ['Psychiatrist'] },
     // Assistant links
-    { label: 'Patient List', href: '/psychiatry/assistant/patients', roles: ['PsychiatristAssistant'] },
-    { label: 'Book Appointment', href: '/psychiatry/assistant/schedule', roles: ['PsychiatristAssistant'] },
-    { label: 'Request Access', href: '/psychiatry/assistant/access-request', roles: ['PsychiatristAssistant'] },
+    { label: 'Patients', href: '/psychiatry/assistant/patients', roles: ['PsychiatristAssistant'] },
+    { label: 'Appointments', href: '/psychiatry/assistant/schedule', roles: ['PsychiatristAssistant'] },
+    { label: "Others' Schedules", href: '/psychiatry/assistant/others-schedules', roles: ['PsychiatristAssistant'] },
+    { label: 'Schedule Request', href: '/psychiatry/assistant/access-request', roles: ['PsychiatristAssistant'] },
     // Patient (any role — access settings)
     { label: 'Access Settings', href: '/psychiatry/patient/access-settings', roles: ['all'] },
-    // Messages for all
-    { label: 'Messages', href: '/messaging/inbox?channel=general', roles: ['all'] },
+    { label: 'My Appointments', href: '/psychiatry/patient/appointments', roles: ['all'] },
+    // Security report for Psychiatrist + PsychiatristAssistant
+    { label: 'Security Report', href: '/psychiatry/security-report', roles: ['Psychiatrist', 'PsychiatristAssistant'] },
+    // Data request for Psychiatrist + PsychiatristAssistant
+    { label: 'Data Request', href: '/data/request/new', roles: ['Psychiatrist', 'PsychiatristAssistant'], exact: true },
+    { label: 'My Requests', href: '/data/request/mine', roles: ['Psychiatrist', 'PsychiatristAssistant'] },
+    { label: 'My Profile',  href: '/me/profile',        roles: ['all'] },
   ];
 
   function visibleLinks(role: string | undefined): NavLink[] {
     if (!role) return [];
-    return navLinks.filter((l) => l.roles.includes('all') || l.roles.includes(role));
+    return navLinks.filter((l) => role === 'Administrator' || l.roles.includes('all') || l.roles.includes(role));
   }
 
   async function handleLogout() { await logout(); goto('/auth'); }
@@ -86,8 +95,14 @@
 
   <div class="body">
     <nav class="side-nav">
+      {#if user?.role === 'Administrator'}
+        <a href="/admin" class="back-link">← Dashboard</a>
+      {/if}
       {#each visibleLinks(user?.role) as link}
-        <a href={link.href} class:active={pathVal.startsWith(link.href)}>
+        <a
+          href={link.href}
+          class:active={link.exact ? pathVal === link.href : pathVal.startsWith(link.href)}
+        >
           {link.label}
         </a>
       {/each}
@@ -114,7 +129,9 @@
   .body { display:flex;flex:1;overflow:hidden; }
   .side-nav { width:200px;min-width:160px;background:#111827;border-right:1px solid rgba(58,190,255,0.1);overflow-y:auto;padding:0.5rem; }
   .side-nav a { display:block;padding:0.55rem 0.75rem;margin-bottom:0.15rem;border-radius:6px;color:#94A3B8;text-decoration:none;font-size:0.8rem; }
-  .side-nav a:hover { color:#E6EDF3;background:rgba(58,190,255,0.05); }
-  .side-nav a.active { color:#3ABEFF;background:rgba(58,190,255,0.1); }
+  .side-nav a:hover { color:#E6EDF3;background:rgba(139,92,246,0.05); }
+  .side-nav a.active { color:#C084FC;background:rgba(139,92,246,0.1); }
+  .back-link { display:block;padding:0.45rem 0.75rem;margin-bottom:0.4rem;border-radius:6px;color:#EF4444;text-decoration:none;font-size:0.75rem;border:1px solid rgba(239,68,68,0.2);background:rgba(239,68,68,0.05); }
+  .back-link:hover { background:rgba(239,68,68,0.12);border-color:rgba(239,68,68,0.4); }
   .main-content { flex:1;overflow-y:auto;padding:1.25rem; }
 </style>

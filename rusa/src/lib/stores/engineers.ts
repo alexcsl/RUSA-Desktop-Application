@@ -238,3 +238,17 @@ export async function getExperimentDetail(
     { experimentId },
   );
 }
+
+// ── UC-ENG-SEC-01: Security Incident Report ─────────────────────────────────
+
+/** Submit a security incident report to the Galactic Security team. */
+export async function submitSecurityReport(payload: {
+  incident_type: string;
+  location: string;
+  description: string;
+  severity: string;
+  occurred_at?: string;
+  recommended_action?: string;
+}): Promise<string> {
+  return invoke<string>('eng_submit_security_report', { payload });
+}

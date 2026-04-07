@@ -12,10 +12,10 @@
 
   let { children } = $props();
   let user: SessionUser | null = $state(null);
-  currentUser.subscribe((v) => (user = v));
+  const unsubUser = currentUser.subscribe((v) => (user = v));
 
   let pathVal = $state('');
-  page.subscribe((p) => (pathVal = p.url.pathname));
+  const unsubPage = page.subscribe((p) => (pathVal = p.url.pathname));
 
   let notifications: NotificationItem[] = $state([]);
   let showNotifs = $state(false);
@@ -48,6 +48,8 @@
   });
 
   onDestroy(() => {
+    unsubUser();
+    unsubPage();
     if (pollTimer) clearInterval(pollTimer);
   });
 
@@ -131,40 +133,118 @@
     return n.type_ === 'broadcast:emergency' || n.type_ === 'broadcast:security';
   }
 
-  interface NavLink { label: string; href: string; roles: string[]; }
+  interface NavLink { label: string; href: string; roles: string[]; exact?: boolean; }
 
   const navLinks: NavLink[] = [
+    // All directors
     { label: 'Votes', href: '/directors/votes', roles: ['all'] },
     { label: 'Meetings', href: '/directors/meetings', roles: ['all'] },
+    // TheAccountant
     { label: 'Financial Queue', href: '/directors/accountant/queue', roles: ['TheAccountant'] },
+    { label: 'Security Report', href: '/directors/accountant/security-report', roles: ['TheAccountant'] },
+    // TheNomad
     { label: 'Relocate', href: '/directors/nomad/relocate', roles: ['TheNomad', 'TheOverseer'] },
-    { label: 'Tasks (Math/Phys)', href: '/directors/artificer/tasks/new', roles: ['TheArtificer'] },
-    { label: 'Proposals (Art)', href: '/directors/artificer/proposals', roles: ['TheArtificer'] },
+    { label: 'Reposition', href: '/directors/nomad/reposition', roles: ['TheNomad', 'TheOverseer'] },
+    { label: 'Assign Task', href: '/directors/nomad/tasks/new', roles: ['TheNomad', 'TheOverseer'] },
+    { label: 'Tasks', href: '/directors/nomad/tasks', roles: ['TheNomad', 'TheOverseer'] },
+    { label: 'Sanitary View', href: '/directors/nomad/sanitary', roles: ['TheNomad', 'TheOverseer'] },
+    { label: 'Settler Logs', href: '/directors/nomad/settlers', roles: ['TheNomad', 'TheOverseer'] },
+    { label: 'Security Report', href: '/directors/nomad/security-report', roles: ['TheNomad', 'TheOverseer'] },
+    // TheArtificer
+    { label: 'Assign Task', href: '/directors/artificer/tasks/new', roles: ['TheArtificer'] },
+    { label: 'Tasks', href: '/directors/artificer/tasks', roles: ['TheArtificer'] },
+    { label: 'Proposals', href: '/directors/artificer/proposals', roles: ['TheArtificer'] },
     { label: 'Test Proposals', href: '/directors/artificer/test-proposals', roles: ['TheArtificer'] },
+    { label: 'Tests', href: '/directors/artificer/tests', roles: ['TheArtificer'] },
     { label: 'Final Docs', href: '/directors/artificer/final-docs', roles: ['TheArtificer'] },
     { label: 'Math Results', href: '/directors/artificer/math-results', roles: ['TheArtificer'] },
-    { label: 'Tasks (Bio/Chem)', href: '/directors/observer/tasks/new', roles: ['TheObserver'] },
-    { label: 'Proposals (Obs)', href: '/directors/observer/proposals', roles: ['TheObserver'] },
+    { label: 'Experiments', href: '/directors/artificer/experiments', roles: ['TheArtificer'] },
+    { label: 'Experiment Logs', href: '/directors/artificer/experiment-logs', roles: ['TheArtificer'] },
+    { label: 'Progress Reports', href: '/directors/artificer/progress-reports', roles: ['TheArtificer'] },
+    { label: 'Task Conclusions', href: '/directors/artificer/conclusions', roles: ['TheArtificer'] },
+    { label: 'Archive', href: '/directors/artificer/archive', roles: ['TheArtificer'] },
+    { label: 'Help Requests', href: '/directors/artificer/help-requests', roles: ['TheArtificer'] },
+    { label: 'Security Report', href: '/directors/artificer/security-report', roles: ['TheArtificer'] },
+    // TheObserver
+    { label: 'Assign Task', href: '/directors/observer/tasks/new', roles: ['TheObserver'] },
+    { label: 'Tasks', href: '/directors/observer/tasks', roles: ['TheObserver'] },
+    { label: 'Proposals', href: '/directors/observer/proposals', roles: ['TheObserver'] },
     { label: 'Test Proposals', href: '/directors/observer/test-proposals', roles: ['TheObserver'] },
+    { label: 'Tests', href: '/directors/observer/tests', roles: ['TheObserver'] },
     { label: 'Final Docs', href: '/directors/observer/final-docs', roles: ['TheObserver'] },
+    { label: 'Experiments', href: '/directors/observer/experiments', roles: ['TheObserver'] },
+    { label: 'Experiment Logs', href: '/directors/observer/experiment-logs', roles: ['TheObserver'] },
+    { label: 'Progress Reports', href: '/directors/observer/progress-reports', roles: ['TheObserver'] },
+    { label: 'Task Conclusions', href: '/directors/observer/conclusions', roles: ['TheObserver'] },
+    { label: 'Archive', href: '/directors/observer/archive', roles: ['TheObserver'] },
+    { label: 'Help Requests', href: '/directors/observer/help-requests', roles: ['TheObserver'] },
+    { label: 'Security Report', href: '/directors/observer/security-report', roles: ['TheObserver'] },
+    // TheWanderer
     { label: 'Assign Mission', href: '/directors/wanderer/missions/new', roles: ['TheWanderer'] },
+    { label: 'Missions', href: '/directors/wanderer/missions', roles: ['TheWanderer'] },
+    { label: 'Territories', href: '/directors/wanderer/territories', roles: ['TheWanderer'] },
     { label: 'Completion Requests', href: '/directors/wanderer/completion-requests', roles: ['TheWanderer'] },
     { label: 'Status Reports', href: '/directors/wanderer/status-reports', roles: ['TheWanderer'] },
+    { label: 'Mission Counters', href: '/directors/wanderer/mission-counters', roles: ['TheWanderer'] },
+    { label: 'Security Report', href: '/directors/wanderer/security-report', roles: ['TheWanderer'] },
+    // TheTaskmaster
     { label: 'Dashboard', href: '/directors/taskmaster/dashboard', roles: ['TheTaskmaster'] },
+    { label: 'Assign Task', href: '/directors/taskmaster/tasks/new', roles: ['TheTaskmaster'] },
+    { label: 'Tasks', href: '/directors/taskmaster/tasks', roles: ['TheTaskmaster'] },
     { label: 'Mission Completions', href: '/directors/taskmaster/mission-completions', roles: ['TheTaskmaster'] },
-    { label: 'Security', href: '/directors/guardian/security-reports', roles: ['TheGuardian'] },
+    { label: 'Experiments', href: '/directors/taskmaster/experiments', roles: ['TheTaskmaster'] },
+    { label: 'Experiment Logs', href: '/directors/taskmaster/experiment-logs', roles: ['TheTaskmaster'] },
+    { label: 'Progress Reports', href: '/directors/taskmaster/progress-reports', roles: ['TheTaskmaster'] },
+    { label: 'Status Reports', href: '/directors/taskmaster/status-reports', roles: ['TheTaskmaster'] },
+    { label: 'Task Conclusions', href: '/directors/taskmaster/conclusions', roles: ['TheTaskmaster'] },
+    { label: 'Security Report', href: '/directors/taskmaster/security-report', roles: ['TheTaskmaster'] },
+    // TheGuardian
+    { label: 'Security Center', href: '/directors/guardian/security-reports', roles: ['TheGuardian'] },
+    { label: 'Send Broadcast', href: '/directors/guardian/broadcast/new', roles: ['TheGuardian'] },
+    { label: 'Secure Messaging', href: '/directors/guardian/secure-messaging', roles: ['TheGuardian'] },
+    { label: 'Incident Reports', href: '/directors/guardian/incident-reports', roles: ['TheGuardian'] },
+    { label: 'Assign Task', href: '/directors/guardian/tasks/new', roles: ['TheGuardian'] },
+    { label: 'Tasks', href: '/directors/guardian/tasks', roles: ['TheGuardian'] },
+    { label: 'Lost & Found', href: '/directors/guardian/lost-found', roles: ['TheGuardian'] },
+    // TheStatistician
     { label: 'Data Requests', href: '/directors/statistician/requests', roles: ['TheStatistician'] },
-    { label: 'Events', href: '/directors/coordinator/events/new', roles: ['TheCoordinator'] },
+    { label: 'Outbound Review', href: '/directors/statistician/outbound', roles: ['TheStatistician'] },
+    { label: 'Data Operations', href: '/directors/statistician/data', roles: ['TheStatistician'] },
+    { label: 'Security Report', href: '/directors/statistician/security-report', roles: ['TheStatistician'] },
+    // TheCoordinator
+    { label: 'Create Event', href: '/directors/coordinator/events/new', roles: ['TheCoordinator'] },
+    { label: 'Events List', href: '/directors/coordinator/events', roles: ['TheCoordinator'] },
+    { label: 'Invoices & Receipts', href: '/directors/coordinator/invoices', roles: ['TheCoordinator'] },
+    { label: 'Security Report', href: '/directors/coordinator/security-report', roles: ['TheCoordinator'] },
+    // TheOverseer
     { label: 'Security Line', href: '/directors/overseer/security-line', roles: ['TheOverseer'] },
+    { label: 'Incident Reports', href: '/directors/guardian/incident-reports', roles: ['TheOverseer'] },
+    { label: 'Lost & Found', href: '/directors/guardian/lost-found', roles: ['TheOverseer'] },
+    // TheAnchorman
     { label: 'Broadcasts', href: '/directors/anchorman/broadcast-requests', roles: ['TheAnchorman'] },
+    { label: 'Security Report', href: '/directors/anchorman/security-report', roles: ['TheAnchorman'] },
+    // TheGuardian
+    { label: 'Security Report', href: '/directors/guardian/security-report', roles: ['TheGuardian'] },
+    // TheLibrarian
     { label: 'Archive', href: '/directors/librarian/archive', roles: ['TheLibrarian'] },
-    { label: 'Submit Data Request', href: '/data/request/new', roles: ['all'] },
-    { label: 'Messages', href: '/messaging/inbox?channel=general', roles: ['all'] },
+    { label: 'Data Access', href: '/directors/librarian/data', roles: ['TheLibrarian'] },
+    { label: 'Redact', href: '/directors/librarian/redact', roles: ['TheLibrarian'] },
+    { label: 'Restrictions', href: '/directors/librarian/restrictions', roles: ['TheLibrarian'] },
+    { label: 'Security Report', href: '/directors/librarian/security-report', roles: ['TheLibrarian'] },
+    // TheDirector
+    { label: 'Accounts', href: '/directors/director/accounts', roles: ['TheDirector'] },
+    { label: 'New Account', href: '/directors/director/accounts/new', roles: ['TheDirector'] },
+    { label: 'Security Report', href: '/directors/director/security-report', roles: ['TheDirector'] },
+    // Shared for all roles
+    { label: 'Personnel Logs', href: '/directors/personnel-logs', roles: ['all'] },
+    { label: 'Data Request', href: '/data/request/new', roles: ['all'], exact: true },
+    { label: 'My Requests', href: '/data/request/mine', roles: ['all'] },
+    { label: 'My Profile',  href: '/me/profile',        roles: ['all'] },
   ];
 
   function visibleLinks(role: string | undefined): NavLink[] {
     if (!role) return [];
-    // GeneralDirector and TheDirector see only Votes
+    if (role === 'Administrator' || role === 'TheDirector' || role === 'GeneralDirector') return navLinks;
     return navLinks.filter((l) => l.roles.includes('all') || l.roles.includes(role));
   }
 
@@ -218,8 +298,14 @@
 
   <div class="body">
     <nav class="side-nav">
+      {#if user?.role === 'Administrator'}
+        <a href="/admin" class="back-link">← Dashboard</a>
+      {/if}
       {#each visibleLinks(user?.role) as link}
-        <a href={link.href} class:active={pathVal.startsWith(link.href)}>
+        <a
+          href={link.href}
+          class:active={link.exact ? pathVal === link.href : pathVal.startsWith(link.href)}
+        >
           {link.label}
         </a>
       {/each}
@@ -269,5 +355,7 @@
   .side-nav a { display:block;padding:0.55rem 0.75rem;margin-bottom:0.15rem;border-radius:6px;color:#94A3B8;text-decoration:none;font-size:0.8rem; }
   .side-nav a:hover { color:#E6EDF3;background:rgba(58,190,255,0.05); }
   .side-nav a.active { color:#3ABEFF;background:rgba(58,190,255,0.1); }
+  .back-link { display:block;padding:0.45rem 0.75rem;margin-bottom:0.4rem;border-radius:6px;color:#EF4444;text-decoration:none;font-size:0.75rem;border:1px solid rgba(239,68,68,0.2);background:rgba(239,68,68,0.05); }
+  .back-link:hover { background:rgba(239,68,68,0.12);border-color:rgba(239,68,68,0.4); }
   .main-content { flex:1;overflow-y:auto;padding:1.25rem; }
 </style>

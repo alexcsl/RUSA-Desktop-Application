@@ -99,3 +99,19 @@ export async function terminateAccount(
 ): Promise<void> {
   await invoke('terminate_personnel_account', { targetUserId });
 }
+
+export interface MyProfileData {
+  id: string;
+  full_name: string;
+  email: string | null;
+  username: string;
+  role_name: string;
+  base_location: string | null;
+  created_at: string;
+  is_active: boolean;
+}
+
+/** Any authenticated user: fetch their own profile data. */
+export async function getMyProfile(): Promise<MyProfileData> {
+  return invoke<MyProfileData>('get_my_profile');
+}

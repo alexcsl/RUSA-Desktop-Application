@@ -54,6 +54,8 @@ pub struct DivisionRow {
     pub id: Uuid,
     pub name: String,
     pub quota: i32,
+    /// Current staff count (latest division assignment per user).
+    pub staff_count: i64,
 }
 
 // -- Staff roster --
@@ -364,9 +366,9 @@ pub struct SetQuotaPayload {
 pub async fn san_get_divisions(
     state: State<'_, AppState>,
 ) -> Result<Vec<DivisionRow>, AppError> {
-    let _user = crate::require_auth_any!(state, [Role::HeadOfSanitary, Role::InspectorCrew, Role::DisposalCrew, Role::WastewaterCrew, Role::CleanupCrew, Role::TransportCrew]);
+    let _user = crate::require_auth_any!(state, [Role::HeadOfSanitary, Role::InspectorCrew, Role::DisposalCrew, Role::WastewaterCrew, Role::CleanupCrew, Role::TransportCrew, Role::TheNomad, Role::TheOverseer, Role::TheDirector, Role::GeneralDirector, Role::Administrator]);
 
-    let cache_key = "sanitary_divisions:quota";
+    let cache_key = "sanitary_divisions:v2";
     if let Ok(mut conn) = state.redis_client.get_multiplexed_async_connection().await {
         if let Ok(cached) = conn.get::<_, String>(cache_key).await {
             if let Ok(rows) = serde_json::from_str::<Vec<DivisionRow>>(&cached) {
@@ -376,7 +378,21 @@ pub async fn san_get_divisions(
     }
 
     let rows = sqlx::query_as::<_, DivisionRow>(
-        "SELECT id, name, quota FROM sanitary_divisions ORDER BY name",
+        r#"
+        SELECT sd.id, sd.name, sd.quota,
+               COALESCE(cnt.staff_count, 0) AS staff_count
+        FROM sanitary_divisions sd
+        LEFT JOIN (
+            SELECT division_id, COUNT(*) AS staff_count
+            FROM (
+                SELECT DISTINCT ON (user_id) user_id, division_id
+                FROM staff_division_assignments
+                ORDER BY user_id, assigned_at DESC
+            ) latest_assignments
+            GROUP BY division_id
+        ) cnt ON cnt.division_id = sd.id
+        ORDER BY sd.name
+        "#,
     )
     .fetch_all(&state.db_pool)
     .await?;
@@ -442,7 +458,7 @@ pub async fn san_set_division_quota(
 pub async fn san_get_staff_roster(
     state: State<'_, AppState>,
 ) -> Result<Vec<StaffRosterEntry>, AppError> {
-    let _user = crate::require_auth_any!(state, [Role::HeadOfSanitary]);
+    let _user = crate::require_auth_any!(state, [Role::HeadOfSanitary, Role::TheNomad, Role::TheOverseer, Role::TheDirector, Role::GeneralDirector, Role::Administrator]);
 
     let rows = sqlx::query_as::<_, StaffRosterEntry>(
         r#"
@@ -477,7 +493,7 @@ pub async fn san_get_staff_roster(
 pub async fn san_get_all_shifts(
     state: State<'_, AppState>,
 ) -> Result<Vec<SanitaryShift>, AppError> {
-    let _user = crate::require_auth_any!(state, [Role::HeadOfSanitary]);
+    let _user = crate::require_auth_any!(state, [Role::HeadOfSanitary, Role::TheNomad, Role::TheOverseer, Role::TheDirector, Role::GeneralDirector, Role::Administrator]);
 
     let shifts = sqlx::query_as::<_, SanitaryShift>(
         r#"
@@ -911,7 +927,7 @@ pub async fn san_assign_recruit(
 pub async fn san_get_inventory(
     state: State<'_, AppState>,
 ) -> Result<Vec<SanitaryInventoryItem>, AppError> {
-    let _user = crate::require_auth_any!(state, [Role::HeadOfSanitary, Role::InspectorCrew, Role::DisposalCrew, Role::WastewaterCrew, Role::CleanupCrew, Role::TransportCrew]);
+    let _user = crate::require_auth_any!(state, [Role::HeadOfSanitary, Role::InspectorCrew, Role::DisposalCrew, Role::WastewaterCrew, Role::CleanupCrew, Role::TransportCrew, Role::TheNomad, Role::TheOverseer, Role::TheDirector, Role::GeneralDirector, Role::Administrator]);
 
     let cache_key = "sanitary_inventory:list";
     if let Ok(mut conn) = state.redis_client.get_multiplexed_async_connection().await {
@@ -1486,23 +1502,22 @@ pub async fn san_submit_inspection_report(
 pub async fn san_get_inspection_reports(
     state: State<'_, AppState>,
 ) -> Result<Vec<InspectionReport>, AppError> {
-    let user = crate::require_auth_any!(state, [Role::InspectorCrew, Role::HeadOfSanitary]);
+    let user = crate::require_auth_any!(state, [
+        Role::HeadOfSanitary,
+        Role::InspectorCrew,
+        Role::DisposalCrew,
+        Role::WastewaterCrew,
+        Role::CleanupCrew,
+        Role::TransportCrew,
+        Role::TheNomad,
+        Role::TheOverseer,
+        Role::TheDirector,
+        Role::GeneralDirector,
+        Role::Administrator
+    ]);
 
-    let reports = if user.role == Role::HeadOfSanitary || user.role == Role::Administrator {
-        sqlx::query_as::<_, InspectionReport>(
-            r#"
-            SELECT ir.id, ir.reported_by, u.full_name AS reporter_name,
-                   ir.report_date, ir.location, ir.area_or_machine,
-                   ir.findings, ir.severity, ir.recommendations, ir.created_at
-            FROM inspection_reports ir
-            JOIN users u ON u.id = ir.reported_by
-            WHERE ir.deleted_at IS NULL
-            ORDER BY ir.created_at DESC
-            "#,
-        )
-        .fetch_all(&state.db_pool)
-        .await?
-    } else {
+    // InspectorCrew sees only their own submissions; all others see all reports
+    let reports = if user.role == Role::InspectorCrew {
         sqlx::query_as::<_, InspectionReport>(
             r#"
             SELECT ir.id, ir.reported_by, u.full_name AS reporter_name,
@@ -1515,6 +1530,20 @@ pub async fn san_get_inspection_reports(
             "#,
         )
         .bind(user.id)
+        .fetch_all(&state.db_pool)
+        .await?
+    } else {
+        sqlx::query_as::<_, InspectionReport>(
+            r#"
+            SELECT ir.id, ir.reported_by, u.full_name AS reporter_name,
+                   ir.report_date, ir.location, ir.area_or_machine,
+                   ir.findings, ir.severity, ir.recommendations, ir.created_at
+            FROM inspection_reports ir
+            JOIN users u ON u.id = ir.reported_by
+            WHERE ir.deleted_at IS NULL
+            ORDER BY ir.created_at DESC
+            "#,
+        )
         .fetch_all(&state.db_pool)
         .await?
     };
@@ -1671,7 +1700,7 @@ pub async fn san_get_disposal_docs(
     state: State<'_, AppState>,
     filter: Option<String>,
 ) -> Result<Vec<DisposalDoc>, AppError> {
-    let _user = crate::require_auth_any!(state, [Role::DisposalCrew, Role::HeadOfSanitary]);
+    let _user = crate::require_auth_any!(state, [Role::DisposalCrew, Role::HeadOfSanitary, Role::TheNomad, Role::TheOverseer, Role::TheDirector, Role::GeneralDirector, Role::Administrator]);
 
     let docs = if let Some(ref cat) = filter {
         sqlx::query_as::<_, DisposalDoc>(
@@ -1839,7 +1868,7 @@ pub async fn san_get_wastewater_docs(
     state: State<'_, AppState>,
     filter: Option<String>,
 ) -> Result<Vec<WastewaterDoc>, AppError> {
-    let _user = crate::require_auth_any!(state, [Role::WastewaterCrew, Role::HeadOfSanitary]);
+    let _user = crate::require_auth_any!(state, [Role::WastewaterCrew, Role::HeadOfSanitary, Role::TheNomad, Role::TheOverseer, Role::TheDirector, Role::GeneralDirector, Role::Administrator]);
 
     let docs = if let Some(ref t) = filter {
         sqlx::query_as::<_, WastewaterDoc>(
@@ -2029,19 +2058,33 @@ pub async fn san_submit_budget_request(
 pub async fn san_get_budget_requests(
     state: State<'_, AppState>,
 ) -> Result<Vec<BudgetRequestSummary>, AppError> {
-    let user = crate::require_auth_any!(state, [Role::HeadOfSanitary]);
+    let user = crate::require_auth_any!(state, [Role::HeadOfSanitary, Role::TheNomad, Role::TheOverseer, Role::TheDirector, Role::GeneralDirector, Role::Administrator]);
 
-    let reqs = sqlx::query_as::<_, BudgetRequestSummary>(
-        r#"
-        SELECT id, total_amount::float8 AS total_amount, justification, status, line_items, created_at
-        FROM sanitary_budget_requests
-        WHERE submitted_by = $1 AND deleted_at IS NULL
-        ORDER BY created_at DESC
-        "#,
-    )
-    .bind(user.id)
-    .fetch_all(&state.db_pool)
-    .await?;
+    // HeadOfSanitary sees only their own submissions; directors see all
+    let reqs = if user.role == Role::HeadOfSanitary {
+        sqlx::query_as::<_, BudgetRequestSummary>(
+            r#"
+            SELECT id, total_amount::float8 AS total_amount, justification, status, line_items, created_at
+            FROM sanitary_budget_requests
+            WHERE submitted_by = $1 AND deleted_at IS NULL
+            ORDER BY created_at DESC
+            "#,
+        )
+        .bind(user.id)
+        .fetch_all(&state.db_pool)
+        .await?
+    } else {
+        sqlx::query_as::<_, BudgetRequestSummary>(
+            r#"
+            SELECT id, total_amount::float8 AS total_amount, justification, status, line_items, created_at
+            FROM sanitary_budget_requests
+            WHERE deleted_at IS NULL
+            ORDER BY created_at DESC
+            "#,
+        )
+        .fetch_all(&state.db_pool)
+        .await?
+    };
 
     Ok(reqs)
 }
@@ -2129,21 +2172,134 @@ pub async fn san_submit_expenditure_report(
 pub async fn san_get_expenditure_reports(
     state: State<'_, AppState>,
 ) -> Result<Vec<ExpenditureReportSummary>, AppError> {
-    let user = crate::require_auth_any!(state, [Role::HeadOfSanitary]);
+    let user = crate::require_auth_any!(state, [Role::HeadOfSanitary, Role::TheNomad, Role::TheOverseer, Role::TheDirector, Role::GeneralDirector, Role::Administrator]);
 
-    let reports = sqlx::query_as::<_, ExpenditureReportSummary>(
+    // HeadOfSanitary sees only their own reports; directors see all
+    let reports = if user.role == Role::HeadOfSanitary {
+        sqlx::query_as::<_, ExpenditureReportSummary>(
+            r#"
+            SELECT id, total_amount::float8 AS total_amount, line_items, foul_play_flag, foul_play_note, created_at
+            FROM sanitary_expenditure_reports
+            WHERE submitted_by = $1 AND deleted_at IS NULL
+            ORDER BY created_at DESC
+            "#,
+        )
+        .bind(user.id)
+        .fetch_all(&state.db_pool)
+        .await?
+    } else {
+        sqlx::query_as::<_, ExpenditureReportSummary>(
+            r#"
+            SELECT id, total_amount::float8 AS total_amount, line_items, foul_play_flag, foul_play_note, created_at
+            FROM sanitary_expenditure_reports
+            WHERE deleted_at IS NULL
+            ORDER BY created_at DESC
+            "#,
+        )
+        .fetch_all(&state.db_pool)
+        .await?
+    };
+
+    Ok(reports)
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Security Report (all sanitary staff)
+// ══════════════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Deserialize)]
+pub struct SanSubmitSecurityReportPayload {
+    pub incident_type: String,
+    pub location: String,
+    pub severity: String,
+    pub description: String,
+    pub occurred_at: Option<String>,
+    pub recommended_action: Option<String>,
+}
+
+/// Submit a security incident report. Inserts into `incident_reports` with
+/// `source = 'external_report'` and notifies all GalacticSecurityHead users.
+/// Access: all six sanitary roles.
+#[tauri::command]
+pub async fn san_submit_security_report(
+    state: State<'_, AppState>,
+    payload: SanSubmitSecurityReportPayload,
+) -> Result<String, AppError> {
+    let user = crate::require_auth_any!(state, [
+        Role::HeadOfSanitary,
+        Role::InspectorCrew,
+        Role::DisposalCrew,
+        Role::WastewaterCrew,
+        Role::CleanupCrew,
+        Role::TransportCrew
+    ]);
+
+    let occurred_at: Option<DateTime<Utc>> = payload
+        .occurred_at
+        .as_deref()
+        .and_then(|s| s.parse().ok());
+
+    let (id,): (Uuid,) = sqlx::query_as(
         r#"
-        SELECT id, total_amount::float8 AS total_amount, line_items, foul_play_flag, foul_play_note, created_at
-        FROM sanitary_expenditure_reports
-        WHERE submitted_by = $1 AND deleted_at IS NULL
-        ORDER BY created_at DESC
+        INSERT INTO incident_reports
+            (reported_by, incident_type, location, severity, description,
+             occurred_at, recommended_action, source)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, 'external_report')
+        RETURNING id
         "#,
     )
     .bind(user.id)
-    .fetch_all(&state.db_pool)
+    .bind(&payload.incident_type)
+    .bind(&payload.location)
+    .bind(&payload.severity)
+    .bind(&payload.description)
+    .bind(occurred_at)
+    .bind(&payload.recommended_action)
+    .fetch_one(&state.db_pool)
     .await?;
 
-    Ok(reports)
+    // Notify all GalacticSecurityHead users
+    sqlx::query(
+        r#"
+        INSERT INTO notifications (user_id, type, payload)
+        SELECT u.id,
+               'incident:reported',
+               $1::jsonb
+        FROM users u
+        JOIN roles r ON r.id = u.role_id
+        WHERE r.name = 'GalacticSecurityHead'
+          AND u.deleted_at IS NULL
+        "#,
+    )
+    .bind(serde_json::json!({
+        "report_id": id,
+        "reported_by": user.full_name,
+        "department": "sanitary",
+        "incident_type": payload.incident_type,
+        "severity": payload.severity,
+        "location": payload.location,
+        "source": "external_report"
+    }))
+    .execute(&state.db_pool)
+    .await?;
+
+    write_audit_log(
+        &state.db_pool,
+        "incident_reports",
+        id,
+        AuditOperation::Create,
+        user.id,
+        None,
+        Some(serde_json::json!({
+            "incident_type": payload.incident_type,
+            "severity": payload.severity,
+            "source": "external_report",
+            "department": "sanitary",
+        })),
+    )
+    .await?;
+
+    Ok(id.to_string())
 }
 
 // ══════════════════════════════════════════════════════════════════════════════

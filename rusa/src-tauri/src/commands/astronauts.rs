@@ -794,7 +794,7 @@ pub async fn ast_assign_mission(
     state: State<'_, AppState>,
     payload: AssignMissionPayload,
 ) -> Result<Uuid, AppError> {
-    let user = crate::require_auth_any!(state, [Role::TheWanderer, Role::TheTaskmaster]);
+    let user = crate::require_auth_any!(state, [Role::TheWanderer, Role::TheTaskmaster, Role::TheDirector]);
 
     if payload.title.trim().is_empty() {
         return Err(AppError::Internal("Mission title cannot be empty.".into()));
@@ -946,7 +946,7 @@ pub async fn ast_process_completion_request(
     state: State<'_, AppState>,
     payload: ProcessCompletionPayload,
 ) -> Result<(), AppError> {
-    let user = crate::require_auth_any!(state, [Role::TheWanderer, Role::Administrator]);
+    let user = crate::require_auth_any!(state, [Role::TheWanderer, Role::TheDirector, Role::Administrator]);
 
     if payload.decision != "forward" && payload.decision != "reject" {
         return Err(AppError::Internal("Decision must be 'forward' or 'reject'.".into()));
@@ -1101,7 +1101,7 @@ pub async fn ast_taskmaster_decide_completion(
     state: State<'_, AppState>,
     payload: TaskmasterMissionDecisionPayload,
 ) -> Result<(), AppError> {
-    let user = crate::require_auth_any!(state, [Role::TheTaskmaster, Role::Administrator]);
+    let user = crate::require_auth_any!(state, [Role::TheTaskmaster, Role::TheDirector, Role::Administrator]);
 
     if payload.decision != "approved" && payload.decision != "rejected" {
         return Err(AppError::Internal("Decision must be 'approved' or 'rejected'.".into()));
@@ -1196,6 +1196,11 @@ pub async fn ast_taskmaster_decide_completion(
                     let _: Result<(), _> = conn.del(format!("mission_counter:{}", aid)).await;
                     let _: Result<(), _> = conn.del(format!("missions:active:{}", aid)).await;
                 }
+            }
+
+            // Invalidate all-astronaut counters cache
+            if let Ok(mut conn) = state.redis_client.get_multiplexed_async_connection().await {
+                let _: Result<(), _> = conn.del("astronaut_counters:all").await;
             }
         }
 
@@ -1297,7 +1302,7 @@ pub async fn ast_get_all_status_reports(
     state: State<'_, AppState>,
 ) -> Result<Vec<StatusReportItem>, AppError> {
     let _user = crate::require_auth_any!(state, [
-        Role::TheWanderer, Role::TheTaskmaster, Role::Administrator
+        Role::TheWanderer, Role::TheTaskmaster, Role::TheDirector, Role::Administrator
     ]);
 
     let reports = sqlx::query_as::<_, StatusReportItem>(
@@ -1347,7 +1352,7 @@ pub struct CompletionRequestSummary {
 pub async fn ast_get_completion_requests_wanderer(
     state: State<'_, AppState>,
 ) -> Result<Vec<CompletionRequestSummary>, AppError> {
-    let _user = crate::require_auth_any!(state, [Role::TheWanderer, Role::Administrator]);
+    let _user = crate::require_auth_any!(state, [Role::TheWanderer, Role::TheDirector, Role::Administrator]);
 
     let requests = sqlx::query_as::<_, CompletionRequestSummary>(
         r#"
@@ -1376,7 +1381,7 @@ pub async fn ast_get_completion_requests_wanderer(
 pub async fn ast_get_completion_requests_taskmaster(
     state: State<'_, AppState>,
 ) -> Result<Vec<CompletionRequestSummary>, AppError> {
-    let _user = crate::require_auth_any!(state, [Role::TheTaskmaster, Role::Administrator]);
+    let _user = crate::require_auth_any!(state, [Role::TheTaskmaster, Role::TheDirector, Role::Administrator]);
 
     let requests = sqlx::query_as::<_, CompletionRequestSummary>(
         r#"
@@ -1500,4 +1505,173 @@ pub async fn ast_get_evidence_urls(
     }
 
     Ok(result)
+}
+
+// ════════════════════════════════════════════════════════════════════════════════
+// All-Astronaut Mission Counters (Others' Missions requirement)
+// ════════════════════════════════════════════════════════════════════════════════
+
+/// Row returned by ast_get_all_astronaut_counters.
+#[derive(Debug, Serialize, Deserialize, FromRow)]
+pub struct AstroCounterItem {
+    pub astronaut_id: Uuid,
+    pub full_name: String,
+    pub interstellar_count: i32,
+    pub terrain_count: i32,
+}
+
+/// Returns mission counters for every active Astronaut, sorted by name.
+/// Cached in Redis for 10 minutes; invalidated when any mission counter increments.
+///
+/// **Access:** Astronaut or TheWanderer (or Administrator).
+#[tauri::command]
+pub async fn ast_get_all_astronaut_counters(
+    state: State<'_, AppState>,
+) -> Result<Vec<AstroCounterItem>, AppError> {
+    let _user = crate::require_auth_any!(state, [Role::Astronaut, Role::TheWanderer, Role::TheDirector]);
+
+    let cache_key = "astronaut_counters:all";
+
+    // Try Redis cache first
+    if let Ok(mut conn) = state.redis_client.get_multiplexed_async_connection().await {
+        if let Ok(cached) = conn.get::<_, String>(cache_key).await {
+            if let Ok(parsed) = serde_json::from_str::<Vec<AstroCounterItem>>(&cached) {
+                return Ok(parsed);
+            }
+        }
+    }
+
+    let counters = sqlx::query_as::<_, AstroCounterItem>(
+        r#"
+        SELECT u.id AS astronaut_id, u.full_name,
+               COALESCE(mc.interstellar_count, 0) AS interstellar_count,
+               COALESCE(mc.terrain_count, 0) AS terrain_count
+        FROM users u
+        JOIN roles r ON r.id = u.role_id
+        LEFT JOIN mission_counters mc ON mc.astronaut_id = u.id
+        WHERE r.name = 'Astronaut' AND u.deleted_at IS NULL
+        ORDER BY u.full_name
+        "#,
+    )
+    .fetch_all(&state.db_pool)
+    .await?;
+
+    // Cache for 10 minutes
+    if let Ok(mut conn) = state.redis_client.get_multiplexed_async_connection().await {
+        if let Ok(json) = serde_json::to_string(&counters) {
+            let _: Result<(), _> = conn.set_ex(cache_key, &json, 600).await;
+        }
+    }
+
+    Ok(counters)
+}
+
+// ════════════════════════════════════════════════════════════════════════════════
+// Astronaut Security Report (UC-AS-SEC-01)
+// ════════════════════════════════════════════════════════════════════════════════
+
+/// Payload for submitting an astronaut security report.
+#[derive(Debug, Deserialize)]
+pub struct AstSubmitSecurityReportPayload {
+    pub incident_type: String,
+    pub location: String,
+    pub description: String,
+    pub severity: String,
+    pub occurred_at: Option<String>,
+    pub recommended_action: Option<String>,
+}
+
+/// Submit a security incident report from an astronaut to the Galactic Security team.
+/// Notifies all active GalacticSecurityHead users.
+///
+/// **Access:** Astronaut (or Administrator).
+#[tauri::command]
+pub async fn ast_submit_security_report(
+    state: State<'_, AppState>,
+    payload: AstSubmitSecurityReportPayload,
+) -> Result<Uuid, AppError> {
+    let user = crate::require_auth!(state, Role::Astronaut);
+
+    if !["low", "medium", "high", "critical"].contains(&payload.severity.as_str()) {
+        return Err(AppError::Internal(
+            "severity must be low, medium, high, or critical".into(),
+        ));
+    }
+
+    if !["unauthorized_access", "equipment_theft", "data_breach",
+         "hazardous_material_incident", "physical_threat", "suspicious_activity",
+         "mission_anomaly", "hostile_contact", "other"]
+        .contains(&payload.incident_type.as_str())
+    {
+        return Err(AppError::Internal(
+            "Invalid incident_type for astronaut report.".into(),
+        ));
+    }
+
+    let occurred_at: Option<DateTime<Utc>> = payload
+        .occurred_at
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .and_then(|s| {
+            s.parse::<DateTime<Utc>>()
+                .ok()
+                .or_else(|| {
+                    chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
+                        .ok()
+                        .and_then(|d| d.and_hms_opt(0, 0, 0))
+                        .map(|ndt| ndt.and_utc())
+                })
+        });
+
+    let row: (Uuid,) = sqlx::query_as(
+        r#"INSERT INTO incident_reports
+               (reported_by, source, incident_type, location, occurred_at,
+                description, severity, recommended_action)
+           VALUES ($1, 'astronaut_report', $2, $3, $4, $5, $6, $7)
+           RETURNING id"#,
+    )
+    .bind(user.id)
+    .bind(&payload.incident_type)
+    .bind(&payload.location)
+    .bind(occurred_at)
+    .bind(&payload.description)
+    .bind(&payload.severity)
+    .bind(&payload.recommended_action)
+    .fetch_one(&state.db_pool)
+    .await?;
+
+    // Notify all active GalacticSecurityHead users
+    let _ = sqlx::query(
+        r#"INSERT INTO notifications (user_id, type, payload)
+           SELECT u.id, 'security_report:new', $1::jsonb
+           FROM users u
+           JOIN roles r ON r.id = u.role_id
+           WHERE r.name = 'GalacticSecurityHead'
+             AND u.deleted_at IS NULL AND u.is_active = true"#,
+    )
+    .bind(serde_json::json!({
+        "report_id": row.0,
+        "reporter": user.full_name,
+        "incident_type": payload.incident_type,
+        "severity": payload.severity,
+    }))
+    .execute(&state.db_pool)
+    .await;
+
+    write_audit_log(
+        &state.db_pool,
+        "incident_reports",
+        row.0,
+        AuditOperation::Create,
+        user.id,
+        None,
+        Some(serde_json::json!({
+            "source": "astronaut_report",
+            "incident_type": payload.incident_type,
+            "severity": payload.severity,
+        })),
+    )
+    .await?;
+
+    Ok(row.0)
 }

@@ -39,6 +39,13 @@ export interface TeamMemberCounter {
   terrain_count: number;
 }
 
+export interface AstroCounterItem {
+  astronaut_id: string;
+  full_name: string;
+  interstellar_count: number;
+  terrain_count: number;
+}
+
 export interface StatusReportItem {
   id: string;
   mission_id: string;
@@ -216,4 +223,21 @@ export async function getCompletionRequestsWanderer(): Promise<CompletionRequest
 /** Get completion requests for Taskmaster queue. */
 export async function getCompletionRequestsTaskmaster(): Promise<CompletionRequestSummary[]> {
   return invoke<CompletionRequestSummary[]>('ast_get_completion_requests_taskmaster');
+}
+
+/** Get mission counters for all active Astronauts. */
+export async function getAllAstronautCounters(): Promise<AstroCounterItem[]> {
+  return invoke<AstroCounterItem[]>('ast_get_all_astronaut_counters');
+}
+
+/** Submit a security incident report from an astronaut. */
+export async function astSubmitSecurityReport(payload: {
+  incident_type: string;
+  location: string;
+  description: string;
+  severity: string;
+  occurred_at?: string;
+  recommended_action?: string;
+}): Promise<string> {
+  return invoke<string>('ast_submit_security_report', { payload });
 }

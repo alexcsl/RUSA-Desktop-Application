@@ -58,6 +58,31 @@ struct InsertedUser {
     id: Uuid,
 }
 
+// ── Role List (Director-accessible) ──────────────────────────────────────────
+
+#[derive(Debug, Serialize, FromRow)]
+pub struct DirRoleEntry {
+    pub name: String,
+}
+
+/// Returns all role names. Used by the reposition UI so directors can pick a target role.
+///
+/// **Access:** Any Director or Administrator.
+#[tauri::command]
+pub async fn dir_get_role_list(
+    state: State<'_, AppState>,
+) -> Result<Vec<DirRoleEntry>, AppError> {
+    let _user = crate::require_auth_director!(state);
+
+    let rows = sqlx::query_as::<_, DirRoleEntry>(
+        "SELECT name FROM roles ORDER BY name ASC"
+    )
+    .fetch_all(&state.db_pool)
+    .await?;
+
+    Ok(rows)
+}
+
 // ── Create Personnel Account ──────────────────────────────────────────────────
 
 /// Creates a new user account.
@@ -76,20 +101,21 @@ pub async fn create_personnel_account(
     payload: CreateAccountPayload,
 ) -> Result<CreatedUser, AppError> {
     // 1. Auth guard: only TheDirector or Administrator
-    let creator = crate::require_auth_any!(state, [Role::TheDirector, Role::Administrator]);
+    let creator = crate::require_auth_any!(state, [Role::TheDirector, Role::GeneralDirector, Role::Administrator]);
 
     // 2. Parse the target role
     let target_role = Role::from_str(&payload.role)
         .map_err(AppError::Internal)?;
 
-    // 3. Rank restriction: TheDirector cannot create Director-level accounts
-    if creator.role == Role::TheDirector && target_role.is_director() {
+    // 3. Rank restriction: TheDirector/GeneralDirector cannot create Director-level accounts
+    let creator_is_director_rank = creator.role == Role::TheDirector || creator.role == Role::GeneralDirector;
+    if creator_is_director_rank && target_role.is_director() {
         return Err(AppError::Forbidden);
     }
 
-    // 4. TheDirector also cannot create Administrator accounts
+    // 4. TheDirector/GeneralDirector also cannot create Administrator accounts
     //    (covered by is_director() returning true for Administrator, but explicit for clarity)
-    if creator.role == Role::TheDirector && target_role == Role::Administrator {
+    if creator_is_director_rank && target_role == Role::Administrator {
         return Err(AppError::Forbidden);
     }
 
@@ -175,8 +201,8 @@ pub async fn terminate_personnel_account(
     state: State<'_, AppState>,
     target_user_id: Uuid,
 ) -> Result<(), AppError> {
-    // 1. Auth guard: TheAnchorman or Administrator
-    let terminator = crate::require_auth_any!(state, [Role::TheAnchorman, Role::Administrator]);
+    // 1. Auth guard: TheAnchorman, TheDirector, GeneralDirector, or Administrator
+    let terminator = crate::require_auth_any!(state, [Role::TheAnchorman, Role::TheDirector, Role::GeneralDirector, Role::Administrator]);
 
     // 2. Prevent self-termination
     if terminator.id == target_user_id {
@@ -288,7 +314,7 @@ pub async fn update_personnel_account(
     target_user_id: Uuid,
     payload: UpdateAccountPayload,
 ) -> Result<(), AppError> {
-    let updater = crate::require_auth_any!(state, [Role::TheDirector, Role::Administrator]);
+    let updater = crate::require_auth_any!(state, [Role::TheDirector, Role::GeneralDirector, Role::Administrator]);
 
     // Fetch current state for audit
     let before: Option<(String, Option<String>, String, Option<Uuid>)> = sqlx::query_as(
@@ -305,16 +331,17 @@ pub async fn update_personnel_account(
     let (old_name, old_email, old_role, old_loc) = before
         .ok_or_else(|| AppError::Internal("User not found.".into()))?;
 
-    // TheDirector cannot update Director-level accounts
+    // TheDirector/GeneralDirector cannot update Director-level accounts
     let target_role = Role::from_str(&old_role).map_err(AppError::Internal)?;
-    if updater.role == Role::TheDirector && target_role.is_director() {
+    let updater_is_director_rank = updater.role == Role::TheDirector || updater.role == Role::GeneralDirector;
+    if updater_is_director_rank && target_role.is_director() {
         return Err(AppError::Forbidden);
     }
 
     // If changing role, validate new role
     if let Some(ref new_role) = payload.role {
         let parsed = Role::from_str(new_role).map_err(AppError::Internal)?;
-        if updater.role == Role::TheDirector && parsed.is_director() {
+        if updater_is_director_rank && parsed.is_director() {
             return Err(AppError::Forbidden);
         }
     }
@@ -516,7 +543,7 @@ pub struct FinancialDocument {
 pub async fn get_financial_queue(
     state: State<'_, AppState>,
 ) -> Result<Vec<FinancialDocument>, AppError> {
-    let _user = crate::require_auth_any!(state, [Role::TheAccountant, Role::Administrator]);
+    let _user = crate::require_auth_any!(state, [Role::TheAccountant, Role::TheDirector, Role::GeneralDirector, Role::Administrator]);
 
     let docs = sqlx::query_as::<_, FinancialDocument>(
         r#"
@@ -550,7 +577,7 @@ pub async fn flag_budget_report(
     state: State<'_, AppState>,
     payload: FlagReportPayload,
 ) -> Result<(), AppError> {
-    let user = crate::require_auth_any!(state, [Role::TheAccountant, Role::Administrator]);
+    let user = crate::require_auth_any!(state, [Role::TheAccountant, Role::TheDirector, Role::GeneralDirector, Role::Administrator]);
 
     if payload.reason.trim().is_empty() {
         return Err(AppError::Internal("Flag reason cannot be empty.".into()));
@@ -659,7 +686,7 @@ pub async fn relocate_personnel(
     payload: RelocatePayload,
 ) -> Result<Uuid, AppError> {
     let user = crate::require_auth_any!(state, [
-        Role::TheNomad, Role::TheOverseer, Role::Administrator
+        Role::TheNomad, Role::TheOverseer, Role::TheDirector, Role::GeneralDirector, Role::Administrator
     ]);
 
     if payload.relocation_type != "temporary" && payload.relocation_type != "permanent" {
@@ -773,7 +800,7 @@ pub struct TaskSummary {
 }
 
 /// Roles that Artificer can assign tasks to
-const ARTIFICER_SUBORDINATES: &[&str] = &["Mathematician", "Physicist"];
+const ARTIFICER_SUBORDINATES: &[&str] = &["Mathematician", "Physicist", "AerospaceEngineer"];
 
 /// Roles that Observer can assign tasks to
 const OBSERVER_SUBORDINATES: &[&str] = &[
@@ -786,12 +813,12 @@ const WANDERER_SUBORDINATES: &[&str] = &["Astronaut"];
 /// All subordinates under Taskmaster scope
 const TASKMASTER_SUBORDINATES: &[&str] = &[
     "Mathematician", "Physicist", "Biologist", "Chemist",
-    "AgriculturalEngineer", "BiologicalEngineer", "Astronaut",
+    "AgriculturalEngineer", "BiologicalEngineer", "Astronaut", "AerospaceEngineer",
 ];
 
 /// Assign a task to a subordinate. Validates scope based on Director role.
 ///
-/// **Access:** TheArtificer, TheObserver, TheWanderer, TheTaskmaster, TheNomad, TheOverseer, or Administrator.
+/// **Access:** TheArtificer, TheObserver, TheWanderer, TheTaskmaster, TheNomad, TheOverseer, TheGuardian, or Administrator.
 #[tauri::command]
 pub async fn assign_task(
     state: State<'_, AppState>,
@@ -800,7 +827,7 @@ pub async fn assign_task(
     let user = crate::require_auth_any!(state, [
         Role::TheArtificer, Role::TheObserver, Role::TheWanderer,
         Role::TheTaskmaster, Role::TheNomad, Role::TheOverseer,
-        Role::TheDirector, Role::Administrator
+        Role::TheGuardian, Role::TheDirector, Role::GeneralDirector, Role::Administrator
     ]);
 
     if payload.title.trim().is_empty() {
@@ -822,13 +849,14 @@ pub async fn assign_task(
         .ok_or_else(|| AppError::Internal("Target user not found.".into()))?;
 
     // Scope validation per assigner role (Admin bypasses)
-    if user.role != Role::Administrator && user.role != Role::TheDirector {
+    if user.role != Role::Administrator && user.role != Role::TheDirector && user.role != Role::GeneralDirector {
         let allowed = match user.role {
             Role::TheArtificer => ARTIFICER_SUBORDINATES,
             Role::TheObserver => OBSERVER_SUBORDINATES,
             Role::TheWanderer => WANDERER_SUBORDINATES,
             Role::TheTaskmaster => TASKMASTER_SUBORDINATES,
             Role::TheNomad | Role::TheOverseer => &["SettlerCommander", "HeadOfSanitary"][..],
+            Role::TheGuardian => &["GalacticSecurityHead", "GalacticSecurityStaff", "PlanetarySecurityHead", "SecuritySupervisor", "SecurityOfficer"][..],
             _ => &[][..],
         };
 
@@ -895,7 +923,7 @@ pub async fn assign_task(
 
 /// Get subordinate task progress filtered by the Director's scope.
 ///
-/// **Access:** TheArtificer, TheObserver, TheWanderer, TheTaskmaster, TheNomad, TheOverseer, or Administrator.
+/// **Access:** TheArtificer, TheObserver, TheWanderer, TheTaskmaster, TheNomad, TheOverseer, TheGuardian, or Administrator.
 #[tauri::command]
 pub async fn get_subordinate_tasks(
     state: State<'_, AppState>,
@@ -903,11 +931,11 @@ pub async fn get_subordinate_tasks(
     let user = crate::require_auth_any!(state, [
         Role::TheArtificer, Role::TheObserver, Role::TheWanderer,
         Role::TheTaskmaster, Role::TheNomad, Role::TheOverseer,
-        Role::TheDirector, Role::Administrator
+        Role::TheGuardian, Role::TheDirector, Role::GeneralDirector, Role::Administrator
     ]);
 
     // Build role filter based on current user's scope
-    let role_filter: Vec<&str> = if user.role == Role::Administrator || user.role == Role::TheDirector {
+    let role_filter: Vec<&str> = if user.role == Role::Administrator || user.role == Role::TheDirector || user.role == Role::GeneralDirector {
         vec![] // empty = all (handled in query)
     } else {
         match user.role {
@@ -916,6 +944,7 @@ pub async fn get_subordinate_tasks(
             Role::TheWanderer => WANDERER_SUBORDINATES.to_vec(),
             Role::TheTaskmaster => TASKMASTER_SUBORDINATES.to_vec(),
             Role::TheNomad | Role::TheOverseer => vec!["SettlerCommander", "HeadOfSanitary"],
+            Role::TheGuardian => vec!["GalacticSecurityHead", "GalacticSecurityStaff", "PlanetarySecurityHead", "SecuritySupervisor", "SecurityOfficer"],
             _ => vec![],
         }
     };
@@ -984,13 +1013,13 @@ pub async fn get_experiment_proposal_queue(
     state: State<'_, AppState>,
 ) -> Result<Vec<ExperimentProposalSummary>, AppError> {
     let user = crate::require_auth_any!(state, [
-        Role::TheArtificer, Role::TheObserver, Role::Administrator
+        Role::TheArtificer, Role::TheObserver, Role::TheDirector, Role::GeneralDirector, Role::Administrator
     ]);
 
     let authority_filter: Option<&str> = match user.role {
         Role::TheArtificer => Some("TheArtificer"),
         Role::TheObserver => Some("TheObserver"),
-        Role::Administrator => None,
+        Role::TheDirector | Role::GeneralDirector | Role::Administrator => None,
         _ => return Err(AppError::Forbidden),
     };
 
@@ -1059,7 +1088,7 @@ pub async fn decide_experiment_proposal(
     payload: ExperimentDecisionPayload,
 ) -> Result<(), AppError> {
     let user = crate::require_auth_any!(state, [
-        Role::TheArtificer, Role::TheObserver, Role::Administrator
+        Role::TheArtificer, Role::TheObserver, Role::TheDirector, Role::GeneralDirector, Role::Administrator
     ]);
 
     if payload.decision != "approved" && payload.decision != "denied" {
@@ -1163,7 +1192,7 @@ pub async fn decide_experiment_proposal(
 pub async fn get_math_results_for_director(
     state: State<'_, AppState>,
 ) -> Result<Vec<serde_json::Value>, AppError> {
-    let user = crate::require_auth_any!(state, [Role::TheArtificer, Role::Administrator]);
+    let user = crate::require_auth_any!(state, [Role::TheArtificer, Role::TheDirector, Role::GeneralDirector, Role::Administrator]);
 
     let rows: Vec<(Uuid, Uuid, Uuid, String, serde_json::Value, Option<String>, chrono::DateTime<chrono::Utc>)> =
         sqlx::query_as(
@@ -1222,13 +1251,13 @@ pub async fn get_test_proposal_queue(
     state: State<'_, AppState>,
 ) -> Result<Vec<TestProposalQueueItem>, AppError> {
     let user = crate::require_auth_any!(state, [
-        Role::TheArtificer, Role::TheObserver, Role::Administrator
+        Role::TheArtificer, Role::TheObserver, Role::TheDirector, Role::GeneralDirector, Role::Administrator
     ]);
 
     let role_filter: Vec<&str> = match user.role {
         Role::TheArtificer => vec!["Physicist"],
-        Role::TheObserver  => vec!["Chemist", "Biologist"],
-        _                  => vec!["Physicist", "Chemist", "Biologist"],
+        Role::TheObserver  => vec!["Chemist", "Biologist", "AgriculturalEngineer", "BiologicalEngineer"],
+        _                  => vec!["Physicist", "Chemist", "Biologist", "AgriculturalEngineer", "BiologicalEngineer"],
     };
 
     let rows = sqlx::query_as::<_, TestProposalQueueItem>(
@@ -1268,7 +1297,7 @@ pub async fn decide_test_proposal(
     payload: TestProposalDecisionPayload,
 ) -> Result<(), AppError> {
     let user = crate::require_auth_any!(state, [
-        Role::TheArtificer, Role::TheObserver, Role::Administrator
+        Role::TheArtificer, Role::TheObserver, Role::TheDirector, Role::GeneralDirector, Role::Administrator
     ]);
 
     if payload.decision != "approved" && payload.decision != "rejected" {
@@ -1395,7 +1424,7 @@ pub async fn get_final_document_queue(
     state: State<'_, AppState>,
 ) -> Result<Vec<FinalDocQueueItem>, AppError> {
     let user = crate::require_auth_any!(state, [
-        Role::TheArtificer, Role::TheObserver, Role::Administrator
+        Role::TheArtificer, Role::TheObserver, Role::TheDirector, Role::GeneralDirector, Role::Administrator
     ]);
 
     let type_filter: Vec<&str> = match user.role {
@@ -1443,7 +1472,7 @@ pub async fn decide_final_document(
     payload: FinalDocDecisionPayload,
 ) -> Result<(), AppError> {
     let user = crate::require_auth_any!(state, [
-        Role::TheArtificer, Role::TheObserver, Role::Administrator
+        Role::TheArtificer, Role::TheObserver, Role::TheDirector, Role::GeneralDirector, Role::Administrator
     ]);
 
     if payload.decision != "approved" && payload.decision != "rejected" {
@@ -1577,7 +1606,7 @@ pub async fn approve_closure_request(
     state: State<'_, AppState>,
     payload: ClosureDecisionPayload,
 ) -> Result<(), AppError> {
-    let user = crate::require_auth_any!(state, [Role::TheTaskmaster, Role::Administrator]);
+    let user = crate::require_auth_any!(state, [Role::TheTaskmaster, Role::TheDirector, Role::GeneralDirector, Role::Administrator]);
 
     if payload.decision != "approved" && payload.decision != "denied" {
         return Err(AppError::Internal(
@@ -1675,7 +1704,7 @@ pub async fn review_help_request(
     payload: ProxyDecisionPayload,
 ) -> Result<(), AppError> {
     let user = crate::require_auth_any!(state, [
-        Role::TheArtificer, Role::TheObserver, Role::TheTaskmaster, Role::Administrator
+        Role::TheArtificer, Role::TheObserver, Role::TheTaskmaster, Role::TheDirector, Role::GeneralDirector, Role::Administrator
     ]);
 
     let valid_decisions = ["forward", "reject", "convert"];
@@ -1737,7 +1766,7 @@ pub async fn review_help_response(
     payload: ProxyDecisionPayload,
 ) -> Result<(), AppError> {
     let user = crate::require_auth_any!(state, [
-        Role::TheArtificer, Role::TheObserver, Role::TheTaskmaster, Role::Administrator
+        Role::TheArtificer, Role::TheObserver, Role::TheTaskmaster, Role::TheDirector, Role::GeneralDirector, Role::Administrator
     ]);
 
     let valid_decisions = ["forward", "withhold"];
@@ -1807,7 +1836,7 @@ pub async fn rename_territory(
     state: State<'_, AppState>,
     payload: RenameTerritoryPayload,
 ) -> Result<(), AppError> {
-    let user = crate::require_auth_any!(state, [Role::TheWanderer, Role::Administrator]);
+    let user = crate::require_auth_any!(state, [Role::TheWanderer, Role::TheDirector, Role::GeneralDirector, Role::Administrator]);
 
     if payload.new_name.trim().is_empty() {
         return Err(AppError::Internal("Territory name cannot be empty.".into()));
@@ -1875,7 +1904,7 @@ pub struct TerritorySummary {
 pub async fn get_territories(
     state: State<'_, AppState>,
 ) -> Result<Vec<TerritorySummary>, AppError> {
-    let _user = crate::require_auth_any!(state, [Role::TheWanderer, Role::Administrator]);
+    let _user = crate::require_auth_any!(state, [Role::TheWanderer, Role::TheDirector, Role::GeneralDirector, Role::Administrator]);
 
     let territories = sqlx::query_as::<_, TerritorySummary>(
         r#"
@@ -2010,13 +2039,13 @@ pub async fn get_broadcast_request_queue(
     state: State<'_, AppState>,
 ) -> Result<Vec<BroadcastRequestSummary>, AppError> {
     let user = crate::require_auth_any!(state, [
-        Role::TheGuardian, Role::TheAnchorman, Role::Administrator
+        Role::TheGuardian, Role::TheAnchorman, Role::TheDirector, Role::GeneralDirector, Role::Administrator
     ]);
 
     let type_filter = match user.role {
         Role::TheGuardian => Some("security"),
         Role::TheAnchorman => Some("informational"),
-        Role::Administrator => None,
+        Role::TheDirector | Role::GeneralDirector | Role::Administrator => None,
         _ => return Err(AppError::Forbidden),
     };
 
@@ -2063,7 +2092,7 @@ pub async fn decide_broadcast_request(
     payload: BroadcastDecisionPayload,
 ) -> Result<(), AppError> {
     let user = crate::require_auth_any!(state, [
-        Role::TheGuardian, Role::TheAnchorman, Role::Administrator
+        Role::TheGuardian, Role::TheAnchorman, Role::TheDirector, Role::GeneralDirector, Role::Administrator
     ]);
 
     if payload.decision != "approved" && payload.decision != "rejected" {
@@ -2146,7 +2175,7 @@ pub async fn send_emergency_broadcast(
     state: State<'_, AppState>,
     payload: BroadcastRequestPayload,
 ) -> Result<Uuid, AppError> {
-    let user = crate::require_auth_any!(state, [Role::TheGuardian, Role::Administrator]);
+    let user = crate::require_auth_any!(state, [Role::TheGuardian, Role::TheDirector, Role::GeneralDirector, Role::Administrator]);
 
     let req_id: (Uuid,) = sqlx::query_as(
         r#"
@@ -2238,7 +2267,7 @@ pub async fn send_informational_broadcast(
     state: State<'_, AppState>,
     payload: BroadcastRequestPayload,
 ) -> Result<Uuid, AppError> {
-    let user = crate::require_auth_any!(state, [Role::TheAnchorman, Role::Administrator]);
+    let user = crate::require_auth_any!(state, [Role::TheAnchorman, Role::TheDirector, Role::GeneralDirector, Role::Administrator]);
 
     let req_id: (Uuid,) = sqlx::query_as(
         r#"
@@ -2378,7 +2407,7 @@ pub struct OutboundResponseSummary {
 pub async fn get_data_request_queue(
     state: State<'_, AppState>,
 ) -> Result<Vec<DataRequestSummary>, AppError> {
-    let _user = crate::require_auth_any!(state, [Role::TheStatistician, Role::Administrator]);
+    let _user = crate::require_auth_any!(state, [Role::TheStatistician, Role::TheDirector, Role::GeneralDirector, Role::Administrator]);
 
     // Check Redis cache
     if let Ok(mut conn) = state.redis_client.get_multiplexed_async_connection().await {
@@ -2438,7 +2467,7 @@ pub async fn decide_data_request(
     state: State<'_, AppState>,
     payload: DataRequestDecisionPayload,
 ) -> Result<(), AppError> {
-    let user = crate::require_auth_any!(state, [Role::TheStatistician, Role::Administrator]);
+    let user = crate::require_auth_any!(state, [Role::TheStatistician, Role::TheDirector, Role::GeneralDirector, Role::Administrator]);
 
     if payload.decision != "approved" && payload.decision != "rejected" {
         return Err(AppError::Internal(
@@ -2570,7 +2599,7 @@ pub async fn decide_data_request(
 pub async fn get_outbound_review_queue(
     state: State<'_, AppState>,
 ) -> Result<Vec<OutboundResponseSummary>, AppError> {
-    let _user = crate::require_auth_any!(state, [Role::TheStatistician, Role::Administrator]);
+    let _user = crate::require_auth_any!(state, [Role::TheStatistician, Role::TheDirector, Role::GeneralDirector, Role::Administrator]);
 
     let rows = sqlx::query_as::<_, OutboundResponseSummary>(
         r#"
@@ -2604,7 +2633,7 @@ pub async fn review_outbound_data_response(
     state: State<'_, AppState>,
     payload: OutboundDataReviewPayload,
 ) -> Result<(), AppError> {
-    let user = crate::require_auth_any!(state, [Role::TheStatistician, Role::Administrator]);
+    let user = crate::require_auth_any!(state, [Role::TheStatistician, Role::TheDirector, Role::GeneralDirector, Role::Administrator]);
 
     let valid_decisions = ["forward", "withhold"];
     if !valid_decisions.contains(&payload.decision.as_str()) {
@@ -2812,7 +2841,7 @@ pub async fn create_event(
     state: State<'_, AppState>,
     payload: CreateEventPayload,
 ) -> Result<Uuid, AppError> {
-    let user = crate::require_auth_any!(state, [Role::TheCoordinator, Role::Administrator]);
+    let user = crate::require_auth_any!(state, [Role::TheCoordinator, Role::TheDirector, Role::GeneralDirector, Role::Administrator]);
 
     if payload.title.trim().is_empty() {
         return Err(AppError::Internal("Event title cannot be empty.".into()));
@@ -2892,7 +2921,7 @@ pub async fn create_event(
 pub async fn get_events(
     state: State<'_, AppState>,
 ) -> Result<Vec<EventSummary>, AppError> {
-    let _user = crate::require_auth_any!(state, [Role::TheCoordinator, Role::Administrator]);
+    let _user = crate::require_auth_any!(state, [Role::TheCoordinator, Role::TheDirector, Role::GeneralDirector, Role::Administrator]);
 
     let events = sqlx::query_as::<_, EventSummary>(
         r#"
@@ -2920,7 +2949,7 @@ pub async fn upload_event_document(
     content_type: String,
     document_type: String,
 ) -> Result<Uuid, AppError> {
-    let user = crate::require_auth_any!(state, [Role::TheCoordinator, Role::Administrator]);
+    let user = crate::require_auth_any!(state, [Role::TheCoordinator, Role::TheDirector, Role::GeneralDirector, Role::Administrator]);
 
     // Generate storage path
     let file_uuid = Uuid::new_v4();
@@ -3010,7 +3039,7 @@ pub async fn get_event_documents(
     state: State<'_, AppState>,
     event_id: Uuid,
 ) -> Result<Vec<EventDocSummary>, AppError> {
-    let _user = crate::require_auth_any!(state, [Role::TheCoordinator, Role::Administrator]);
+    let _user = crate::require_auth_any!(state, [Role::TheCoordinator, Role::TheDirector, Role::GeneralDirector, Role::Administrator]);
 
     let docs = sqlx::query_as::<_, EventDocSummary>(
         r#"
@@ -3048,7 +3077,7 @@ pub async fn terminate_personnel(
     state: State<'_, AppState>,
     payload: TerminatePayload,
 ) -> Result<(), AppError> {
-    let user = crate::require_auth_any!(state, [Role::TheAnchorman, Role::Administrator]);
+    let user = crate::require_auth_any!(state, [Role::TheAnchorman, Role::TheDirector, Role::GeneralDirector, Role::Administrator]);
 
     if user.id == payload.target_user_id {
         return Err(AppError::Internal("Cannot terminate yourself.".into()));
@@ -3294,7 +3323,7 @@ pub async fn send_security_message(
     payload: SendMessagePayload,
 ) -> Result<Uuid, AppError> {
     let user = crate::require_auth_any!(state, [
-        Role::TheGuardian, Role::Administrator
+        Role::TheGuardian, Role::TheDirector, Role::GeneralDirector, Role::Administrator
     ]);
 
     if payload.channel != "security" {
@@ -3365,7 +3394,7 @@ pub async fn get_security_messages(
     state: State<'_, AppState>,
 ) -> Result<Vec<MessageSummary>, AppError> {
     let user = crate::require_auth_any!(state, [
-        Role::TheGuardian, Role::TheOverseer, Role::Administrator
+        Role::TheGuardian, Role::TheOverseer, Role::TheDirector, Role::GeneralDirector, Role::Administrator
     ]);
 
     let messages = sqlx::query_as::<_, MessageSummary>(
@@ -3398,7 +3427,7 @@ pub async fn get_message_recipients(
     message_id: Uuid,
 ) -> Result<Vec<MessageRecipientRow>, AppError> {
     let _user = crate::require_auth_any!(state, [
-        Role::TheGuardian, Role::TheOverseer, Role::Administrator
+        Role::TheGuardian, Role::TheOverseer, Role::TheDirector, Role::GeneralDirector, Role::Administrator
     ]);
 
     let rows = sqlx::query_as::<_, MessageRecipientRow>(
@@ -3426,7 +3455,7 @@ pub async fn recall_message(
     message_id: Uuid,
 ) -> Result<(), AppError> {
     let user = crate::require_auth_any!(state, [
-        Role::TheGuardian, Role::Administrator
+        Role::TheGuardian, Role::TheDirector, Role::GeneralDirector, Role::Administrator
     ]);
 
     // Verify sender owns this message
@@ -3476,7 +3505,7 @@ pub async fn mark_message_read(
     message_id: Uuid,
 ) -> Result<(), AppError> {
     let user = crate::require_auth_any!(state, [
-        Role::TheGuardian, Role::TheOverseer, Role::Administrator
+        Role::TheGuardian, Role::TheOverseer, Role::TheDirector, Role::GeneralDirector, Role::Administrator
     ]);
 
     sqlx::query(
@@ -3507,8 +3536,648 @@ pub struct DirDailySecurityReport {
     pub created_at: DateTime<Utc>,
 }
 
+// ── TheLibrarian — Document Restrictions & Redactions (UC-LIB-01, UC-LIB-02) ─
+
+#[derive(Debug, Serialize, FromRow)]
+pub struct DocRestrictionRow {
+    pub id: Uuid,
+    pub document_id: Uuid,
+    pub restriction_type: String,
+    pub allowed_roles: Vec<String>,
+    pub notes: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub restricted_by_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LibRestrictPayload {
+    pub document_id: Uuid,
+    pub restriction_type: String,
+    pub allowed_roles: Vec<String>,
+    pub notes: Option<String>,
+}
+
+/// Restrict access to a document (TheLibrarian, UC-LIB-01).
+///
+/// Inserts a `document_restrictions` row so that downstream access checks
+/// can enforce role-gating on archived documents.
+///
+/// **Access:** TheLibrarian or Administrator.
+#[tauri::command]
+pub async fn lib_restrict_document_access(
+    state: State<'_, AppState>,
+    payload: LibRestrictPayload,
+) -> Result<(), AppError> {
+    let user = crate::require_auth_any!(state, [Role::TheLibrarian, Role::TheDirector, Role::GeneralDirector, Role::Administrator]);
+
+    if !["full_access_control", "field_redaction"].contains(&payload.restriction_type.as_str()) {
+        return Err(AppError::Internal(
+            "restriction_type must be full_access_control or field_redaction".into(),
+        ));
+    }
+
+    let row_id: (Uuid,) = sqlx::query_as(
+        r#"INSERT INTO document_restrictions
+               (document_id, restricted_by, restriction_type, allowed_roles, notes)
+           VALUES ($1, $2, $3, $4, $5)
+           RETURNING id"#,
+    )
+    .bind(payload.document_id)
+    .bind(user.id)
+    .bind(&payload.restriction_type)
+    .bind(&payload.allowed_roles)
+    .bind(&payload.notes)
+    .fetch_one(&state.db_pool)
+    .await?;
+
+    write_audit_log(
+        &state.db_pool,
+        "document_restrictions",
+        row_id.0,
+        AuditOperation::Create,
+        user.id,
+        None,
+        Some(serde_json::json!({
+            "document_id": payload.document_id,
+            "restriction_type": payload.restriction_type,
+            "allowed_roles": payload.allowed_roles,
+        })),
+    )
+    .await?;
+
+    Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LibRedactPayload {
+    pub document_id: Uuid,
+    pub field_name: String,
+    pub reason: Option<String>,
+}
+
+/// Redact a specific field on an archived document (TheLibrarian, UC-LIB-02).
+///
+/// Records the redaction in `document_redactions`. The actual masking is
+/// enforced when the document is rendered on the frontend.
+///
+/// **Access:** TheLibrarian or Administrator.
+#[tauri::command]
+pub async fn lib_redact_document_field(
+    state: State<'_, AppState>,
+    payload: LibRedactPayload,
+) -> Result<(), AppError> {
+    let user = crate::require_auth_any!(state, [Role::TheLibrarian, Role::TheDirector, Role::GeneralDirector, Role::Administrator]);
+
+    let row_id: (Uuid,) = sqlx::query_as(
+        r#"INSERT INTO document_redactions
+               (document_id, field_name, redacted_by, reason)
+           VALUES ($1, $2, $3, $4)
+           RETURNING id"#,
+    )
+    .bind(payload.document_id)
+    .bind(&payload.field_name)
+    .bind(user.id)
+    .bind(&payload.reason)
+    .fetch_one(&state.db_pool)
+    .await?;
+
+    write_audit_log(
+        &state.db_pool,
+        "document_redactions",
+        row_id.0,
+        AuditOperation::Create,
+        user.id,
+        None,
+        Some(serde_json::json!({
+            "document_id": payload.document_id,
+            "field_name": payload.field_name,
+        })),
+    )
+    .await?;
+
+    Ok(())
+}
+
+/// List all active document restrictions (TheLibrarian).
+///
+/// Returns restrictions ordered newest-first, joined with the restrictor's name.
+///
+/// **Access:** TheLibrarian or Administrator.
+#[tauri::command]
+pub async fn lib_get_restriction_list(
+    state: State<'_, AppState>,
+) -> Result<Vec<DocRestrictionRow>, AppError> {
+    let _user = crate::require_auth_any!(state, [Role::TheLibrarian, Role::TheDirector, Role::GeneralDirector, Role::Administrator]);
+
+    let rows = sqlx::query_as::<_, DocRestrictionRow>(
+        r#"SELECT dr.id, dr.document_id, dr.restriction_type, dr.allowed_roles,
+                  dr.notes, dr.created_at,
+                  u.full_name AS restricted_by_name
+           FROM document_restrictions dr
+           JOIN users u ON u.id = dr.restricted_by
+           WHERE dr.deleted_at IS NULL
+           ORDER BY dr.created_at DESC
+           LIMIT 500"#,
+    )
+    .fetch_all(&state.db_pool)
+    .await?;
+
+    Ok(rows)
+}
+
+/// Soft-delete a document restriction (TheLibrarian).
+///
+/// Sets `deleted_at` / `deleted_by` — the restriction is no longer enforced
+/// after this call.
+///
+/// **Access:** TheLibrarian or Administrator.
+#[tauri::command]
+pub async fn lib_remove_restriction(
+    state: State<'_, AppState>,
+    restriction_id: Uuid,
+) -> Result<(), AppError> {
+    let user = crate::require_auth_any!(state, [Role::TheLibrarian, Role::TheDirector, Role::GeneralDirector, Role::Administrator]);
+
+    sqlx::query(
+        r#"UPDATE document_restrictions
+           SET deleted_at = NOW(), deleted_by = $1
+           WHERE id = $2 AND deleted_at IS NULL"#,
+    )
+    .bind(user.id)
+    .bind(restriction_id)
+    .execute(&state.db_pool)
+    .await?;
+
+    write_audit_log(
+        &state.db_pool,
+        "document_restrictions",
+        restriction_id,
+        AuditOperation::Delete,
+        user.id,
+        Some(serde_json::json!({ "id": restriction_id })),
+        None,
+    )
+    .await?;
+
+    Ok(())
+}
+
+// ── Daily Security Reports ────────────────────────────────────────────────────
+
 /// Get all daily security reports (for Guardian review & oversight).
 ///
+// ══════════════════════════════════════════════════════════════════════════════
+// Security Report (TheAnchorman, TheNomad, TheAccountant)
+// ══════════════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Deserialize)]
+pub struct DirSubmitSecurityReportPayload {
+    pub incident_type: String,
+    pub location: String,
+    pub severity: String,
+    pub description: String,
+    pub occurred_at: Option<String>,
+    pub recommended_action: Option<String>,
+}
+
+/// Submit a security incident report for a Director role.
+/// Inserts into `incident_reports` with `source = 'external_report'` and
+/// notifies all GalacticSecurityHead users.
+/// Access: TheAnchorman, TheNomad, TheAccountant, TheArtificer, or TheObserver.
+#[tauri::command]
+pub async fn dir_submit_security_report(
+    state: State<'_, AppState>,
+    payload: DirSubmitSecurityReportPayload,
+) -> Result<String, AppError> {
+    let user = crate::require_auth_any!(state, [
+        Role::TheAnchorman, Role::TheNomad, Role::TheAccountant,
+        Role::TheArtificer, Role::TheObserver, Role::TheTaskmaster,
+        Role::TheWanderer, Role::TheCoordinator, Role::TheStatistician,
+        Role::TheLibrarian, Role::TheDirector, Role::GeneralDirector, Role::TheOverseer, Role::TheGuardian
+    ]);
+
+    let occurred_at = payload.occurred_at.as_deref()
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|dt| dt.with_timezone(&chrono::Utc));
+
+    let (report_id,): (Uuid,) = sqlx::query_as(
+        r#"
+        INSERT INTO incident_reports
+            (reported_by, incident_type, location, severity, description, occurred_at,
+             recommended_action, source, status)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, 'external_report', 'open')
+        RETURNING id
+        "#,
+    )
+    .bind(user.id)
+    .bind(&payload.incident_type)
+    .bind(&payload.location)
+    .bind(&payload.severity)
+    .bind(&payload.description)
+    .bind(occurred_at)
+    .bind(payload.recommended_action.as_deref())
+    .fetch_one(&state.db_pool)
+    .await?;
+
+    // Notify all GalacticSecurityHead users — single INSERT...SELECT, no N+1
+    sqlx::query(
+        r#"
+        INSERT INTO notifications (user_id, type, payload)
+        SELECT u.id, 'incident:reported', $1::jsonb
+        FROM users u
+        JOIN roles r ON r.id = u.role_id
+        WHERE r.name = 'GalacticSecurityHead' AND u.deleted_at IS NULL
+        "#,
+    )
+    .bind(serde_json::json!({
+        "report_id": report_id,
+        "reported_by": user.full_name,
+        "incident_type": payload.incident_type,
+        "severity": payload.severity,
+        "location": payload.location,
+        "source": "external_report"
+    }))
+    .execute(&state.db_pool)
+    .await?;
+
+    write_audit_log(
+        &state.db_pool,
+        "incident_reports",
+        report_id,
+        AuditOperation::Create,
+        user.id,
+        None,
+        Some(serde_json::json!({
+            "incident_type": payload.incident_type,
+            "severity": payload.severity,
+            "source": "external_report"
+        })),
+    )
+    .await?;
+
+    Ok(report_id.to_string())
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Nomad: View Settler Logs across all settlements (UC-NOM-02/03)
+// ══════════════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Serialize, FromRow)]
+pub struct DirProgressReportRow {
+    pub id: Uuid,
+    pub task_id: Uuid,
+    pub task_title: String,
+    pub submitted_by_name: String,
+    pub settlement_name: Option<String>,
+    pub week: Option<String>,
+    pub rag_status: Option<String>,
+    pub progress_made: String,
+    pub materials_equipment: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// View all settler progress reports across all settlements.
+/// Access: TheNomad, TheOverseer, or Administrator.
+#[tauri::command]
+pub async fn dir_nomad_get_progress_reports(
+    state: State<'_, AppState>,
+) -> Result<Vec<DirProgressReportRow>, AppError> {
+    let _user = crate::require_auth_any!(state, [Role::TheNomad, Role::TheOverseer, Role::TheDirector, Role::GeneralDirector, Role::Administrator]);
+
+    let rows = sqlx::query_as::<_, DirProgressReportRow>(
+        r#"
+        SELECT spr.id, spr.task_id, st.title AS task_title,
+               u.full_name AS submitted_by_name,
+               s.name AS settlement_name,
+               spr.week, spr.rag_status, spr.progress_made,
+               spr.materials_equipment, spr.created_at
+        FROM settler_progress_reports spr
+        JOIN settler_tasks st ON st.id = spr.task_id
+        JOIN users u ON u.id = spr.submitted_by
+        LEFT JOIN settlements s ON s.id = spr.settlement_id
+        ORDER BY spr.created_at DESC
+        LIMIT 500
+        "#,
+    )
+    .fetch_all(&state.db_pool)
+    .await?;
+
+    Ok(rows)
+}
+
+#[derive(Debug, Serialize, FromRow)]
+pub struct DirBuildingLogRow {
+    pub id: Uuid,
+    pub building_name: String,
+    pub submitted_by_name: String,
+    pub settlement_name: Option<String>,
+    pub check_date: NaiveDate,
+    pub findings: Option<String>,
+    pub status: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// View all building health logs across all settlements.
+/// Access: TheNomad, TheOverseer, or Administrator.
+#[tauri::command]
+pub async fn dir_nomad_get_building_logs(
+    state: State<'_, AppState>,
+) -> Result<Vec<DirBuildingLogRow>, AppError> {
+    let _user = crate::require_auth_any!(state, [Role::TheNomad, Role::TheOverseer, Role::TheDirector, Role::GeneralDirector, Role::Administrator]);
+
+    let rows = sqlx::query_as::<_, DirBuildingLogRow>(
+        r#"
+        SELECT bh.id, bh.building_name, u.full_name AS submitted_by_name,
+               s.name AS settlement_name,
+               bh.check_date, bh.findings, bh.status, bh.created_at
+        FROM building_health_logs bh
+        JOIN users u ON u.id = bh.checked_by
+        LEFT JOIN settlements s ON s.id = bh.settlement_id
+        ORDER BY bh.check_date DESC, bh.created_at DESC
+        LIMIT 500
+        "#,
+    )
+    .fetch_all(&state.db_pool)
+    .await?;
+
+    Ok(rows)
+}
+
+#[derive(Debug, Serialize, FromRow)]
+pub struct DirFarmHealthRow {
+    pub id: Uuid,
+    pub subject_type: String,
+    pub subject_name: String,
+    pub submitted_by_name: String,
+    pub settlement_name: Option<String>,
+    pub log_date: NaiveDate,
+    pub condition: String,
+    pub treatment: Option<String>,
+    pub notes: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// View all farm health logs across all settlements.
+/// Access: TheNomad, TheOverseer, or Administrator.
+#[tauri::command]
+pub async fn dir_nomad_get_farm_logs(
+    state: State<'_, AppState>,
+) -> Result<Vec<DirFarmHealthRow>, AppError> {
+    let _user = crate::require_auth_any!(state, [Role::TheNomad, Role::TheOverseer, Role::TheDirector, Role::GeneralDirector, Role::Administrator]);
+
+    let rows = sqlx::query_as::<_, DirFarmHealthRow>(
+        r#"
+        SELECT fh.id, fh.subject_type, fh.subject_name, u.full_name AS submitted_by_name,
+               s.name AS settlement_name,
+               fh.log_date, fh.condition, fh.treatment, fh.notes, fh.created_at
+        FROM farm_health_logs fh
+        JOIN users u ON u.id = fh.logged_by
+        LEFT JOIN settlements s ON s.id = fh.settlement_id
+        ORDER BY fh.log_date DESC, fh.created_at DESC
+        LIMIT 500
+        "#,
+    )
+    .fetch_all(&state.db_pool)
+    .await?;
+
+    Ok(rows)
+}
+
+#[derive(Debug, Serialize, FromRow)]
+pub struct DirAnomalyReportRow {
+    pub id: Uuid,
+    pub settlement_name: Option<String>,
+    pub submitted_by_name: String,
+    pub description: String,
+    pub location_in_settlement: Option<String>,
+    pub danger_level: Option<String>,
+    pub severity: String,
+    pub status: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// View all anomaly reports across all settlements.
+/// Access: TheNomad, TheOverseer, or Administrator.
+#[tauri::command]
+pub async fn dir_nomad_get_anomaly_reports(
+    state: State<'_, AppState>,
+) -> Result<Vec<DirAnomalyReportRow>, AppError> {
+    let _user = crate::require_auth_any!(state, [Role::TheNomad, Role::TheOverseer, Role::TheDirector, Role::GeneralDirector, Role::Administrator]);
+
+    let rows = sqlx::query_as::<_, DirAnomalyReportRow>(
+        r#"
+        SELECT ar.id, s.name AS settlement_name, u.full_name AS submitted_by_name,
+               ar.description, ar.location_in_settlement, ar.danger_level,
+               ar.severity, ar.status, ar.created_at
+        FROM anomaly_reports ar
+        JOIN users u ON u.id = ar.reported_by
+        LEFT JOIN settlements s ON s.id = ar.settlement_id
+        WHERE ar.deleted_at IS NULL
+        ORDER BY ar.created_at DESC
+        LIMIT 500
+        "#,
+    )
+    .fetch_all(&state.db_pool)
+    .await?;
+
+    Ok(rows)
+}
+
+#[derive(Debug, Serialize, FromRow)]
+pub struct DirSettlerComplaintRow {
+    pub id: Uuid,
+    pub settlement_name: Option<String>,
+    pub reported_by_name: String,
+    pub subject_name: Option<String>,
+    pub incident_description: String,
+    pub status: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// View all settler complaints/reports across all settlements.
+/// Access: TheNomad, TheOverseer, or Administrator.
+#[tauri::command]
+pub async fn dir_nomad_get_settler_reports(
+    state: State<'_, AppState>,
+) -> Result<Vec<DirSettlerComplaintRow>, AppError> {
+    let _user = crate::require_auth_any!(state, [Role::TheNomad, Role::TheOverseer, Role::TheDirector, Role::GeneralDirector, Role::Administrator]);
+
+    let rows = sqlx::query_as::<_, DirSettlerComplaintRow>(
+        r#"
+        SELECT sc.id, s.name AS settlement_name,
+               u.full_name AS reported_by_name,
+               su.full_name AS subject_name,
+               sc.incident_description, sc.status, sc.created_at
+        FROM settler_complaints sc
+        JOIN users u ON u.id = sc.reported_by
+        LEFT JOIN users su ON su.id = sc.subject_user_id
+        LEFT JOIN settlements s ON s.id = sc.settlement_id
+        WHERE sc.deleted_at IS NULL
+        ORDER BY sc.created_at DESC
+        LIMIT 500
+        "#,
+    )
+    .fetch_all(&state.db_pool)
+    .await?;
+
+    Ok(rows)
+}
+
+#[derive(Debug, Serialize, FromRow)]
+pub struct DirSettlementInventoryRow {
+    pub id: Uuid,
+    pub settlement_name: Option<String>,
+    pub item_name: String,
+    pub category: Option<String>,
+    pub quantity: i32,
+    pub unit: Option<String>,
+    pub min_threshold: i32,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// View settlement inventory across all settlements.
+/// Access: TheNomad, TheOverseer, or Administrator.
+#[tauri::command]
+pub async fn dir_nomad_get_settlement_inventory(
+    state: State<'_, AppState>,
+) -> Result<Vec<DirSettlementInventoryRow>, AppError> {
+    let _user = crate::require_auth_any!(state, [Role::TheNomad, Role::TheOverseer, Role::TheDirector, Role::GeneralDirector, Role::Administrator]);
+
+    let rows = sqlx::query_as::<_, DirSettlementInventoryRow>(
+        r#"
+        SELECT si.id, s.name AS settlement_name, si.item_name, si.category,
+               si.quantity, si.unit, si.min_threshold, si.updated_at
+        FROM settlement_inventory si
+        LEFT JOIN settlements s ON s.id = si.settlement_id
+        WHERE si.deleted_at IS NULL
+        ORDER BY s.name, si.category, si.item_name
+        LIMIT 1000
+        "#,
+    )
+    .fetch_all(&state.db_pool)
+    .await?;
+
+    Ok(rows)
+}
+
+#[derive(Debug, Serialize, FromRow)]
+pub struct DirSupplyRequestRow {
+    pub id: Uuid,
+    pub settlement_name: Option<String>,
+    pub submitted_by_name: String,
+    pub justification: Option<String>,
+    pub status: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// View supply requests across all settlements.
+/// Access: TheNomad, TheOverseer, or Administrator.
+#[tauri::command]
+pub async fn dir_nomad_get_supply_requests(
+    state: State<'_, AppState>,
+) -> Result<Vec<DirSupplyRequestRow>, AppError> {
+    let _user = crate::require_auth_any!(state, [Role::TheNomad, Role::TheOverseer, Role::TheDirector, Role::GeneralDirector, Role::Administrator]);
+
+    let rows = sqlx::query_as::<_, DirSupplyRequestRow>(
+        r#"
+        SELECT sr.id, s.name AS settlement_name, u.full_name AS submitted_by_name,
+               sr.justification, sr.status, sr.created_at
+        FROM supply_requests sr
+        JOIN users u ON u.id = sr.submitted_by
+        LEFT JOIN settlements s ON s.id = sr.settlement_id
+        WHERE sr.deleted_at IS NULL
+        ORDER BY sr.created_at DESC
+        LIMIT 500
+        "#,
+    )
+    .fetch_all(&state.db_pool)
+    .await?;
+
+    Ok(rows)
+}
+
+// ════════════════════════════════════════════════════════════════════════════════
+// UC-NOM-02: Reposition Personnel (change role)
+// ════════════════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Deserialize)]
+pub struct NomadRepositionPayload {
+    pub target_user_id: Uuid,
+    pub new_role: String,
+}
+
+/// Change the role of a non-Director staff member.
+///
+/// **Access:** TheNomad, TheOverseer, or Administrator.
+/// TheNomad / TheOverseer cannot reposition Director or Administrator accounts.
+#[tauri::command]
+pub async fn dir_nomad_reposition_personnel(
+    state: State<'_, AppState>,
+    payload: NomadRepositionPayload,
+) -> Result<(), AppError> {
+    let actor = crate::require_auth_any!(state, [
+        Role::TheNomad, Role::TheOverseer, Role::TheDirector, Role::GeneralDirector, Role::Administrator
+    ]);
+
+    // Fetch current state for audit
+    let before: Option<(String, String)> = sqlx::query_as(
+        r#"
+        SELECT u.full_name, r.name AS role_name
+        FROM users u JOIN roles r ON r.id = u.role_id
+        WHERE u.id = $1 AND u.deleted_at IS NULL
+        "#,
+    )
+    .bind(payload.target_user_id)
+    .fetch_optional(&state.db_pool)
+    .await?;
+
+    let (full_name, old_role) = before
+        .ok_or_else(|| AppError::Internal("User not found.".into()))?;
+
+    let target_role_parsed = Role::from_str(&old_role).map_err(AppError::Internal)?;
+    let new_role_parsed = Role::from_str(&payload.new_role).map_err(AppError::Internal)?;
+
+    // Non-administrator actors cannot touch Director or Administrator accounts
+    if actor.role != Role::Administrator {
+        if target_role_parsed.is_director() || target_role_parsed == Role::Administrator {
+            return Err(AppError::Internal(
+                "Cannot reposition Directors or Administrators.".into(),
+            ));
+        }
+        if new_role_parsed.is_director() || new_role_parsed == Role::Administrator {
+            return Err(AppError::Internal(
+                "Cannot assign Director or Administrator roles.".into(),
+            ));
+        }
+    }
+
+    sqlx::query(
+        r#"
+        UPDATE users SET
+            role_id = (SELECT id FROM roles WHERE name = $2),
+            updated_at = NOW()
+        WHERE id = $1 AND deleted_at IS NULL
+        "#,
+    )
+    .bind(payload.target_user_id)
+    .bind(&payload.new_role)
+    .execute(&state.db_pool)
+    .await?;
+
+    write_audit_log(
+        &state.db_pool,
+        "users",
+        payload.target_user_id,
+        AuditOperation::Update,
+        actor.id,
+        Some(serde_json::json!({ "role": old_role, "full_name": full_name })),
+        Some(serde_json::json!({ "role": payload.new_role })),
+    )
+    .await?;
+
+    Ok(())
+}
+
 /// When TheGuardian fetches reports that have not yet been marked as
 /// delivered, they are automatically stamped with `delivered_to_guardian_at`.
 ///
@@ -3518,7 +4187,7 @@ pub async fn dir_get_daily_security_reports(
     state: State<'_, AppState>,
 ) -> Result<Vec<DirDailySecurityReport>, AppError> {
     let user = crate::require_auth_any!(state, [
-        Role::TheGuardian, Role::TheOverseer, Role::Administrator
+        Role::TheGuardian, Role::TheOverseer, Role::TheDirector, Role::GeneralDirector, Role::Administrator
     ]);
 
     // Mark un-delivered reports as delivered when The Guardian reads them
@@ -3546,4 +4215,727 @@ pub async fn dir_get_daily_security_reports(
     .await?;
 
     Ok(reports)
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Guardian: Incident Reports view (UC-GUA-01/02/03)
+// ══════════════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Serialize, FromRow)]
+pub struct DirIncidentReportRow {
+    pub id: Uuid,
+    pub reported_by: Uuid,
+    pub reporter_name: String,
+    pub source: String,
+    pub incident_type: String,
+    pub location: String,
+    pub severity: String,
+    pub sector_or_base: Option<String>,
+    pub occurred_at: Option<DateTime<Utc>>,
+    pub description: String,
+    pub recommended_action: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Get all incident reports for Guardian oversight.
+/// Covers Earth Incident Reports (source=direct_observation/assignment from earth bases),
+/// Galactic Incident Reports (source=direct_observation/assignment in space), and
+/// External Reports (source=external_report submitted by Directors).
+/// Access: TheGuardian, TheOverseer, or Administrator.
+#[tauri::command]
+pub async fn dir_guardian_get_incident_reports(
+    state: State<'_, AppState>,
+) -> Result<Vec<DirIncidentReportRow>, AppError> {
+    let _user = crate::require_auth_any!(state, [
+        Role::TheGuardian, Role::TheOverseer, Role::TheDirector, Role::GeneralDirector, Role::Administrator
+    ]);
+
+    let rows = sqlx::query_as::<_, DirIncidentReportRow>(
+        r#"
+        SELECT ir.id, ir.reported_by, u.full_name AS reporter_name,
+               ir.source, ir.incident_type, ir.location, ir.severity,
+               ir.sector_or_base, ir.occurred_at, ir.description,
+               ir.recommended_action, ir.created_at
+        FROM incident_reports ir
+        JOIN users u ON u.id = ir.reported_by
+        WHERE ir.deleted_at IS NULL
+        ORDER BY ir.created_at DESC
+        LIMIT 500
+        "#,
+    )
+    .fetch_all(&state.db_pool)
+    .await?;
+
+    Ok(rows)
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Guardian: Lost and Found Logs (UC-GUA-05)
+// ══════════════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Serialize, FromRow)]
+pub struct DirLostFoundRow {
+    pub id: Uuid,
+    pub reported_by: Uuid,
+    pub reporter_name: String,
+    pub item_description: String,
+    pub location_found: String,
+    pub found_at: Option<DateTime<Utc>>,
+    pub status: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// View all lost-and-found log entries.
+/// Access: TheGuardian, TheOverseer, or Administrator.
+#[tauri::command]
+pub async fn dir_guardian_get_lost_found_logs(
+    state: State<'_, AppState>,
+) -> Result<Vec<DirLostFoundRow>, AppError> {
+    let _user = crate::require_auth_any!(state, [
+        Role::TheGuardian, Role::TheOverseer, Role::TheDirector, Role::GeneralDirector, Role::Administrator
+    ]);
+
+    let rows = sqlx::query_as::<_, DirLostFoundRow>(
+        r#"
+        SELECT lf.id, lf.reported_by, u.full_name AS reporter_name,
+               lf.item_description, lf.location_found, lf.found_at,
+               lf.status, lf.created_at
+        FROM lost_found_logs lf
+        JOIN users u ON u.id = lf.reported_by
+        WHERE lf.deleted_at IS NULL
+        ORDER BY lf.created_at DESC
+        LIMIT 500
+        "#,
+    )
+    .fetch_all(&state.db_pool)
+    .await?;
+
+    Ok(rows)
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Observer / Artificer: Approved Tests view
+// ══════════════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Serialize, FromRow)]
+pub struct DirApprovedTestRow {
+    pub id: Uuid,
+    pub name: String,
+    pub category: String,
+    pub applicable_scope: String,
+    pub accepted_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// View approved tests. Filtered by applicable_scope for Artificer vs Observer.
+/// Artificer sees physical-scope tests; Observer sees matter/plants/all_species tests.
+/// Access: TheArtificer, TheObserver, or Administrator.
+#[tauri::command]
+pub async fn dir_get_approved_tests(
+    state: State<'_, AppState>,
+) -> Result<Vec<DirApprovedTestRow>, AppError> {
+    let user = crate::require_auth_any!(state, [
+        Role::TheArtificer, Role::TheObserver, Role::TheDirector, Role::GeneralDirector, Role::Administrator
+    ]);
+
+    // Scope by applicable_scope field
+    let scope_filter: Vec<&str> = match user.role {
+        Role::TheArtificer => vec!["physical"],
+        Role::TheObserver  => vec!["matter", "plants", "all_species"],
+        _                  => vec!["physical", "matter", "plants", "all_species"],
+    };
+
+    let rows = sqlx::query_as::<_, DirApprovedTestRow>(
+        r#"
+        SELECT id, name, category, applicable_scope, accepted_at, created_at
+        FROM approved_tests
+        WHERE deleted_at IS NULL
+          AND applicable_scope = ANY($1)
+        ORDER BY created_at DESC
+        LIMIT 200
+        "#,
+    )
+    .bind(&scope_filter)
+    .fetch_all(&state.db_pool)
+    .await?;
+
+    Ok(rows)
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Observer / Artificer: Science Archive view
+// ══════════════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Serialize, FromRow)]
+pub struct DirScienceArchiveRow {
+    pub id: Uuid,
+    pub archive_type: String,
+    pub name: String,
+    pub classification: Option<String>,
+    pub submitted_by: Uuid,
+    pub submitter_name: String,
+    pub approved_by: Option<Uuid>,
+    pub approver_name: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// View science archive entries (species, matter/physical objects) for Artificer/Observer scope.
+/// Artificer sees physical_object entries; Observer sees species and matter entries.
+/// Access: TheArtificer, TheObserver, or Administrator.
+#[tauri::command]
+pub async fn dir_get_science_archive(
+    state: State<'_, AppState>,
+) -> Result<Vec<DirScienceArchiveRow>, AppError> {
+    let user = crate::require_auth_any!(state, [
+        Role::TheArtificer, Role::TheObserver, Role::TheDirector, Role::GeneralDirector, Role::Administrator
+    ]);
+
+    let type_filter: Vec<&str> = match user.role {
+        Role::TheArtificer => vec!["physical_object"],
+        Role::TheObserver  => vec!["species", "matter"],
+        _                  => vec!["species", "matter", "physical_object"],
+    };
+
+    let rows = sqlx::query_as::<_, DirScienceArchiveRow>(
+        r#"
+        SELECT sa.id, sa.type AS archive_type, sa.name, sa.classification,
+               sa.submitted_by, u.full_name AS submitter_name,
+               sa.approved_by, ap.full_name AS approver_name,
+               sa.created_at
+        FROM science_archive sa
+        JOIN users u ON u.id = sa.submitted_by
+        LEFT JOIN users ap ON ap.id = sa.approved_by
+        WHERE sa.deleted_at IS NULL
+          AND sa.type = ANY($1)
+        ORDER BY sa.created_at DESC
+        LIMIT 500
+        "#,
+    )
+    .bind(&type_filter)
+    .fetch_all(&state.db_pool)
+    .await?;
+
+    Ok(rows)
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Observer / Artificer: Experiment Daily Logs view
+// ══════════════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Serialize, FromRow)]
+pub struct DirExperimentLogRow {
+    pub id: Uuid,
+    pub experiment_id: Uuid,
+    pub experiment_title: String,
+    pub logged_by: Option<Uuid>,
+    pub logger_name: Option<String>,
+    pub log_date: chrono::NaiveDate,
+    pub rag_status: Option<String>,
+    pub completed_actions: Option<String>,
+    pub pending_actions: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// View experiment daily logs for Artificer/Observer scope.
+/// Access: TheArtificer, TheObserver, or Administrator.
+#[tauri::command]
+pub async fn dir_get_experiment_logs(
+    state: State<'_, AppState>,
+) -> Result<Vec<DirExperimentLogRow>, AppError> {
+    let user = crate::require_auth_any!(state, [
+        Role::TheArtificer, Role::TheObserver, Role::TheTaskmaster, Role::TheDirector, Role::GeneralDirector, Role::Administrator
+    ]);
+
+    // Scope by role of the experiment proposer
+    let role_filter: Vec<&str> = match user.role {
+        Role::TheArtificer => vec!["Physicist", "Mathematician", "AerospaceEngineer"],
+        Role::TheObserver  => vec!["Biologist", "Chemist", "AgriculturalEngineer", "BiologicalEngineer"],
+        _                  => vec!["Physicist", "Mathematician", "AerospaceEngineer", "Biologist", "Chemist", "AgriculturalEngineer", "BiologicalEngineer"],
+    };
+
+    let rows = sqlx::query_as::<_, DirExperimentLogRow>(
+        r#"
+        SELECT el.id, el.experiment_id, e.title AS experiment_title,
+               el.created_by AS logged_by, u.full_name AS logger_name,
+               el.log_date, el.rag_status, el.completed_actions,
+               el.pending_actions, el.created_at
+        FROM experiment_daily_logs el
+        JOIN experiments e ON e.id = el.experiment_id
+        JOIN users ep ON ep.id = e.proposed_by
+        JOIN roles r ON r.id = ep.role_id
+        LEFT JOIN users u ON u.id = el.created_by
+        WHERE el.deleted_at IS NULL
+          AND r.name = ANY($1)
+        ORDER BY el.log_date DESC, el.created_at DESC
+        LIMIT 500
+        "#,
+    )
+    .bind(&role_filter)
+    .fetch_all(&state.db_pool)
+    .await?;
+
+    Ok(rows)
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Observer / Artificer: Task Closure Requests view
+// ══════════════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Serialize, FromRow)]
+pub struct DirClosureRequestRow {
+    pub id: Uuid,
+    pub title: String,
+    pub submitted_by: Uuid,
+    pub submitter_name: String,
+    pub conclusion_summary: Option<String>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// View completed tasks (with conclusion notes) from Artificer/Observer/Taskmaster subordinates.
+/// Conclusions are stored in tasks.payload->>'conclusion' and tasks.status='completed'.
+/// Access: TheArtificer, TheObserver, TheTaskmaster, or Administrator.
+#[tauri::command]
+pub async fn dir_get_closure_requests_for_director(
+    state: State<'_, AppState>,
+) -> Result<Vec<DirClosureRequestRow>, AppError> {
+    let user = crate::require_auth_any!(state, [
+        Role::TheArtificer, Role::TheObserver, Role::TheTaskmaster, Role::TheDirector, Role::GeneralDirector, Role::Administrator
+    ]);
+
+    let role_filter: Vec<&str> = match user.role {
+        Role::TheArtificer => ARTIFICER_SUBORDINATES.to_vec(),
+        Role::TheObserver  => OBSERVER_SUBORDINATES.to_vec(),
+        Role::TheTaskmaster => TASKMASTER_SUBORDINATES.to_vec(),
+        _ => vec![],
+    };
+
+    let rows = if role_filter.is_empty() {
+        sqlx::query_as::<_, DirClosureRequestRow>(
+            r#"
+            SELECT t.id, t.title, t.assigned_to AS submitted_by,
+                   u.full_name AS submitter_name,
+                   t.payload->>'conclusion' AS conclusion_summary,
+                   t.completed_at, t.created_at
+            FROM tasks t
+            JOIN users u ON u.id = t.assigned_to
+            WHERE t.deleted_at IS NULL
+              AND t.status = 'completed'
+              AND t.payload ? 'conclusion'
+            ORDER BY t.completed_at DESC NULLS LAST
+            LIMIT 200
+            "#,
+        )
+        .fetch_all(&state.db_pool)
+        .await?
+    } else {
+        sqlx::query_as::<_, DirClosureRequestRow>(
+            r#"
+            SELECT t.id, t.title, t.assigned_to AS submitted_by,
+                   u.full_name AS submitter_name,
+                   t.payload->>'conclusion' AS conclusion_summary,
+                   t.completed_at, t.created_at
+            FROM tasks t
+            JOIN users u ON u.id = t.assigned_to
+            JOIN roles r ON r.id = u.role_id
+            WHERE t.deleted_at IS NULL
+              AND t.status = 'completed'
+              AND t.payload ? 'conclusion'
+              AND r.name = ANY($1)
+            ORDER BY t.completed_at DESC NULLS LAST
+            LIMIT 200
+            "#,
+        )
+        .bind(&role_filter)
+        .fetch_all(&state.db_pool)
+        .await?
+    };
+
+    Ok(rows)
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Observer / Artificer / Taskmaster: Task Progress Reports (UC-ART-02, UC-OBS-02)
+// ══════════════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Serialize, FromRow)]
+pub struct DirTaskProgressEntry {
+    pub id: Uuid,
+    pub source: String,               // 'progress_report' | 'task_progress'
+    pub task_title: String,
+    pub submitter_name: String,
+    pub submitter_role: String,
+    pub current_status: Option<String>,
+    pub summary: Option<String>,
+    pub rag_status: Option<String>,
+    pub report_date: Option<chrono::NaiveDate>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Get task progress reports from subordinates (from `progress_reports` table and
+/// task payload progress updates). Filters by the director's scope.
+///
+/// **Access:** TheArtificer, TheObserver, TheTaskmaster, TheDirector, GeneralDirector, or Administrator.
+#[tauri::command]
+pub async fn dir_get_task_progress_reports(
+    state: State<'_, AppState>,
+) -> Result<Vec<DirTaskProgressEntry>, AppError> {
+    let user = crate::require_auth_any!(state, [
+        Role::TheArtificer, Role::TheObserver, Role::TheTaskmaster,
+        Role::TheDirector, Role::GeneralDirector, Role::Administrator
+    ]);
+
+    let role_filter: Vec<&str> = match user.role {
+        Role::TheArtificer   => ARTIFICER_SUBORDINATES.to_vec(),
+        Role::TheObserver    => OBSERVER_SUBORDINATES.to_vec(),
+        Role::TheTaskmaster  => TASKMASTER_SUBORDINATES.to_vec(),
+        _ => vec![],
+    };
+
+    let rows = if role_filter.is_empty() {
+        // Admin/TheDirector: all progress reports + all task progress
+        sqlx::query_as::<_, DirTaskProgressEntry>(
+            r#"
+            SELECT pr.id, 'progress_report'::TEXT AS source,
+                   t.title AS task_title, u.full_name AS submitter_name,
+                   r.name AS submitter_role, pr.current_status,
+                   pr.work_completed AS summary,
+                   NULL::TEXT AS rag_status,
+                   pr.report_date, pr.created_at
+            FROM progress_reports pr
+            JOIN tasks t ON t.id = pr.task_id
+            JOIN users u ON u.id = pr.submitted_by
+            JOIN roles r ON r.id = u.role_id
+            WHERE pr.deleted_at IS NULL
+            UNION ALL
+            SELECT t.id, 'task_progress'::TEXT AS source,
+                   t.title AS task_title, u.full_name AS submitter_name,
+                   r.name AS submitter_role, t.status AS current_status,
+                   t.payload->'latest_progress'->>'summary' AS summary,
+                   t.payload->'latest_progress'->>'rag_status' AS rag_status,
+                   NULL::DATE AS report_date, t.updated_at AS created_at
+            FROM tasks t
+            JOIN users u ON u.id = t.assigned_to
+            JOIN roles r ON r.id = u.role_id
+            WHERE t.deleted_at IS NULL AND t.payload ? 'latest_progress'
+            ORDER BY created_at DESC
+            LIMIT 500
+            "#,
+        )
+        .fetch_all(&state.db_pool)
+        .await?
+    } else {
+        sqlx::query_as::<_, DirTaskProgressEntry>(
+            r#"
+            SELECT pr.id, 'progress_report'::TEXT AS source,
+                   t.title AS task_title, u.full_name AS submitter_name,
+                   r.name AS submitter_role, pr.current_status,
+                   pr.work_completed AS summary,
+                   NULL::TEXT AS rag_status,
+                   pr.report_date, pr.created_at
+            FROM progress_reports pr
+            JOIN tasks t ON t.id = pr.task_id
+            JOIN users u ON u.id = pr.submitted_by
+            JOIN roles r ON r.id = u.role_id
+            WHERE pr.deleted_at IS NULL
+              AND r.name = ANY($1)
+            UNION ALL
+            SELECT t.id, 'task_progress'::TEXT AS source,
+                   t.title AS task_title, u.full_name AS submitter_name,
+                   r.name AS submitter_role, t.status AS current_status,
+                   t.payload->'latest_progress'->>'summary' AS summary,
+                   t.payload->'latest_progress'->>'rag_status' AS rag_status,
+                   NULL::DATE AS report_date, t.updated_at AS created_at
+            FROM tasks t
+            JOIN users u ON u.id = t.assigned_to
+            JOIN roles r ON r.id = u.role_id
+            WHERE t.deleted_at IS NULL AND t.payload ? 'latest_progress'
+              AND r.name = ANY($1)
+            ORDER BY created_at DESC
+            LIMIT 500
+            "#,
+        )
+        .bind(&role_filter)
+        .fetch_all(&state.db_pool)
+        .await?
+    };
+
+    Ok(rows)
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Observer / Artificer: Experiments list view
+// ══════════════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Serialize, FromRow)]
+pub struct DirExperimentRow {
+    pub id: Uuid,
+    pub title: String,
+    pub experiment_type: String,
+    pub status: String,
+    pub proposed_by: Uuid,
+    pub proposer_name: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// View experiments scoped to the Director's subordinates.
+/// Artificer sees physics/math/aerospace experiments; Observer sees bio/chem/ageng/bioeng.
+/// Access: TheArtificer, TheObserver, or Administrator.
+#[tauri::command]
+pub async fn dir_get_experiments(
+    state: State<'_, AppState>,
+) -> Result<Vec<DirExperimentRow>, AppError> {
+    let user = crate::require_auth_any!(state, [
+        Role::TheArtificer, Role::TheObserver, Role::TheTaskmaster, Role::TheDirector, Role::GeneralDirector, Role::Administrator
+    ]);
+
+    let role_filter: Vec<&str> = match user.role {
+        Role::TheArtificer => vec!["Physicist", "Mathematician", "AerospaceEngineer"],
+        Role::TheObserver  => vec!["Biologist", "Chemist", "AgriculturalEngineer", "BiologicalEngineer"],
+        _                  => vec!["Physicist", "Mathematician", "AerospaceEngineer", "Biologist", "Chemist", "AgriculturalEngineer", "BiologicalEngineer"],
+    };
+
+    let rows = sqlx::query_as::<_, DirExperimentRow>(
+        r#"
+        SELECT e.id, e.title, e.type AS experiment_type, e.status,
+               e.proposed_by, u.full_name AS proposer_name, e.created_at
+        FROM experiments e
+        JOIN users u ON u.id = e.proposed_by
+        JOIN roles r ON r.id = u.role_id
+        WHERE e.deleted_at IS NULL
+          AND r.name = ANY($1)
+        ORDER BY e.created_at DESC
+        LIMIT 500
+        "#,
+    )
+    .bind(&role_filter)
+    .fetch_all(&state.db_pool)
+    .await?;
+
+    Ok(rows)
+}
+
+// ── Personnel Activity Log (all directors, UC-NOM-01 / UC-ANC-03) ─────────────
+
+#[derive(Debug, Serialize, FromRow)]
+pub struct PersonnelActivityEntry {
+    pub id: Uuid,
+    pub entry_type: String,
+    pub target_id: Uuid,
+    pub target_name: String,
+    pub actor_id: Uuid,
+    pub actor_name: String,
+    pub description: String,
+    pub effective_date: NaiveDate,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Returns a combined log of terminations and personnel relocations for all directors.
+///
+/// **Access:** Any authenticated Director (via `require_auth_director!`) or Administrator.
+#[tauri::command]
+pub async fn get_personnel_activity_log(
+    state: State<'_, AppState>,
+) -> Result<Vec<PersonnelActivityEntry>, AppError> {
+    let _user = crate::require_auth_director!(state);
+
+    let rows = sqlx::query_as::<_, PersonnelActivityEntry>(
+        r#"
+        SELECT tr.id,
+               'termination' AS entry_type,
+               tr.terminated_user_id AS target_id,
+               tu.full_name AS target_name,
+               tr.terminated_by AS actor_id,
+               au.full_name AS actor_name,
+               tr.reason AS description,
+               tr.effective_date,
+               tr.created_at
+        FROM termination_records tr
+        JOIN users tu ON tu.id = tr.terminated_user_id
+        JOIN users au ON au.id = tr.terminated_by
+        UNION ALL
+        SELECT pr.id,
+               'relocation' AS entry_type,
+               pr.target_user_id AS target_id,
+               pu.full_name AS target_name,
+               pr.relocated_by AS actor_id,
+               ru.full_name AS actor_name,
+               (pr.origin_location || ' → ' || pr.destination || ' (' || pr.relocation_type || ')') AS description,
+               pr.effective_date,
+               pr.created_at
+        FROM personnel_relocations pr
+        JOIN users pu ON pu.id = pr.target_user_id
+        JOIN users ru ON ru.id = pr.relocated_by
+        WHERE pr.deleted_at IS NULL
+        ORDER BY created_at DESC
+        LIMIT 500
+        "#,
+    )
+    .fetch_all(&state.db_pool)
+    .await?;
+
+    Ok(rows)
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Director: My Security Reports (UC-ANC-02 — view own submitted reports)
+// ══════════════════════════════════════════════════════════════════════════════
+
+/// Retrieve security incident reports submitted by the currently authenticated Director.
+///
+/// **Access:** Any authenticated Director or Administrator.
+#[tauri::command]
+pub async fn dir_get_my_security_reports(
+    state: State<'_, AppState>,
+) -> Result<Vec<DirIncidentReportRow>, AppError> {
+    let user = crate::require_auth_director!(state);
+
+    let rows = sqlx::query_as::<_, DirIncidentReportRow>(
+        r#"
+        SELECT ir.id, ir.reported_by, u.full_name AS reporter_name,
+               ir.source, ir.incident_type, ir.location, ir.severity,
+               ir.sector_or_base, ir.occurred_at, ir.description,
+               ir.recommended_action, ir.created_at
+        FROM incident_reports ir
+        JOIN users u ON u.id = ir.reported_by
+        WHERE ir.reported_by = $1
+          AND ir.deleted_at IS NULL
+        ORDER BY ir.created_at DESC
+        LIMIT 200
+        "#,
+    )
+    .bind(user.id)
+    .fetch_all(&state.db_pool)
+    .await?;
+
+    Ok(rows)
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Accountant: Generate signed URL for private storage file (invoice viewer)
+// ══════════════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Serialize)]
+pub struct SignedFileUrl {
+    pub storage_path: String,
+    pub signed_url: String,
+}
+
+/// Generate a short-lived (1 h) signed URL for a private `rusa-files` bucket object.
+/// Used by TheAccountant to view invoice images/PDFs attached to budget requests.
+///
+/// **Access:** TheAccountant, TheDirector, GeneralDirector, or Administrator.
+#[tauri::command]
+pub async fn dir_get_file_signed_url(
+    state: State<'_, AppState>,
+    storage_path: String,
+) -> Result<SignedFileUrl, AppError> {
+    let _user = crate::require_auth_any!(state, [
+        Role::TheAccountant, Role::TheCoordinator, Role::TheDirector, Role::GeneralDirector, Role::Administrator
+    ]);
+
+    if storage_path.trim().is_empty() {
+        return Err(AppError::Internal("storage_path is required.".into()));
+    }
+
+    let sign_url = format!(
+        "{}/object/sign/rusa-files/{}",
+        state.supabase_storage_url, storage_path
+    );
+
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(&sign_url)
+        .header("Authorization", format!("Bearer {}", state.supabase_service_jwt))
+        .header("Content-Type", "application/json")
+        .body(r#"{"expiresIn":3600}"#)
+        .send()
+        .await;
+
+    let signed_url = match resp {
+        Ok(r) if r.status().is_success() => {
+            let text = r.text().await.unwrap_or_default();
+            let body: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+            let token = body["signedURL"].as_str().unwrap_or("");
+            if token.starts_with("http") {
+                token.to_string()
+            } else {
+                format!("{}{}", state.supabase_storage_url, token)
+            }
+        }
+        _ => return Err(AppError::Internal("Failed to generate signed URL.".into())),
+    };
+
+    Ok(SignedFileUrl { storage_path, signed_url })
+}
+
+// ── TheLibrarian: Soft-delete record (UC-LIB-03) ─────────────────────────────
+
+/// Tables the Librarian is authorised to soft-delete from.
+const DELETABLE_TABLES: &[&str] = &[
+    "document_restrictions",
+    "document_redactions",
+    "event_documents",
+    "personnel_relocations",
+    "broadcast_requests",
+    "tasks",
+    "meetings",
+];
+
+#[derive(Debug, Deserialize)]
+pub struct LibSoftDeletePayload {
+    pub table_name: String,
+    pub record_id: Uuid,
+    pub reason: Option<String>,
+}
+
+/// Soft-delete a record from an archiveable table (TheLibrarian, UC-LIB-03).
+///
+/// Sets `deleted_at = NOW()` and `deleted_by = user_id` on the target row.
+/// Only tables in `DELETABLE_TABLES` are permitted.
+///
+/// **Access:** TheLibrarian, TheDirector, or Administrator.
+#[tauri::command]
+pub async fn lib_soft_delete_record(
+    state: State<'_, AppState>,
+    payload: LibSoftDeletePayload,
+) -> Result<(), AppError> {
+    let user = crate::require_auth_any!(state, [
+        Role::TheLibrarian, Role::TheDirector, Role::GeneralDirector, Role::Administrator
+    ]);
+
+    if !DELETABLE_TABLES.contains(&payload.table_name.as_str()) {
+        return Err(AppError::Forbidden);
+    }
+    if !crate::commands::da_operations::is_valid_identifier(&payload.table_name) {
+        return Err(AppError::Forbidden);
+    }
+
+    let query = format!(
+        "UPDATE {} SET deleted_at = NOW(), deleted_by = $1 WHERE id = $2 AND deleted_at IS NULL",
+        payload.table_name
+    );
+
+    let result = sqlx::query(&query)
+        .bind(user.id)
+        .bind(payload.record_id)
+        .execute(&state.db_pool)
+        .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(AppError::Internal("Record not found or already deleted.".into()));
+    }
+
+    write_audit_log(
+        &state.db_pool,
+        &payload.table_name,
+        payload.record_id,
+        AuditOperation::Delete,
+        user.id,
+        None,
+        Some(serde_json::json!({ "reason": payload.reason })),
+    )
+    .await?;
+
+    Ok(())
 }

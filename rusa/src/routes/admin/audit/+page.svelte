@@ -53,7 +53,7 @@
     } finally {
       loading = false;
     }
-  }
+  } 
 
   function applyFilters() { page = 1; loadPage(); }
   function resetFilters() { tableName = ''; operation = ''; performerId = ''; dateFrom = ''; dateTo = ''; page = 1; loadPage(); }

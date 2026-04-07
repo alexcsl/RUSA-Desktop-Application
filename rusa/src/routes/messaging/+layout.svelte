@@ -184,6 +184,9 @@
   <!-- ─── Body: Sidebar + Content ─── -->
   <div class="body">
     <aside class="channel-sidebar">
+      {#if user?.role === 'Administrator'}
+        <a href="/admin" class="back-link">← Dashboard</a>
+      {/if}
       <h2 class="sidebar-title">Channels</h2>
       <nav class="channel-nav">
         {#each getAccessibleChannels() as ch}
@@ -204,6 +207,7 @@
         <a href="/messaging/compose" class="compose-btn">+ Compose</a>
         <a href="/messaging/sent" class="action-link" class:active={pathVal.startsWith('/messaging/sent')}>Sent</a>
         <a href="/messaging/groups" class="action-link" class:active={pathVal.startsWith('/messaging/groups')}>Groups</a>
+        <a href="/me/profile" class="action-link" class:active={pathVal.startsWith('/me/profile')}>My Profile</a>
       </nav>
 
       {#if user && ['GalacticSecurityHead', 'GalacticSecurityStaff', 'TheGuardian', 'TheOverseer', 'Administrator'].includes(user.role)}
@@ -381,4 +385,6 @@
 
   /* ─── Main Content ─── */
   .messaging-content { flex: 1; overflow-y: auto; padding: 1.25rem; }
+  .back-link { display:block;padding:0.45rem 0.75rem;margin-bottom:0.4rem;border-radius:6px;color:#EF4444;text-decoration:none;font-size:0.75rem;border:1px solid rgba(239,68,68,0.2);background:rgba(239,68,68,0.05); }
+  .back-link:hover { background:rgba(239,68,68,0.12);border-color:rgba(239,68,68,0.4); }
 </style>

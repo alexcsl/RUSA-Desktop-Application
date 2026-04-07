@@ -73,8 +73,8 @@ export interface ProposeNewTestPayload {
   goal: string;
   procedure?: string;
   species_scope?: string;
-  category: string | string[];
-  apparatuses?: string | string[];
+  category: string[];
+  apparatuses?: string;
   required_data?: string;
   justification?: string;
 }
@@ -297,4 +297,79 @@ export async function proposeNewSpecies(
   payload: ProposeNewSpeciesPayload,
 ): Promise<string> {
   return invoke<string>('propose_new_species', { payload });
+}
+
+// ── New Types ─────────────────────────────────────────────────────────────────
+
+export interface ExperimentLogWithExp {
+  id: string;
+  experiment_id: string;
+  experiment_title: string;
+  experiment_type: string;
+  log_date: string;
+  rag_status: string | null;
+  completed_actions: string | null;
+  pending_actions: string | null;
+  collected_data: Record<string, unknown> | null;
+  created_at: string;
+}
+
+// ── New Commands ──────────────────────────────────────────────────────────────
+
+/** Submit a progress update for an active assigned task. */
+export async function submitTaskProgress(payload: {
+  task_id: string;
+  progress_summary: string;
+  rag_status?: string;
+}): Promise<void> {
+  await invoke('submit_task_progress', { payload });
+}
+
+/** Mark an assigned task as completed with a conclusion summary. */
+export async function concludeTask(payload: {
+  task_id: string;
+  conclusion_summary: string;
+}): Promise<void> {
+  await invoke('conclude_task', { payload });
+}
+
+/** Propose a new matter/material for the chemistry archive (Chemist only). */
+export async function proposeNewMatter(payload: {
+  title: string;
+  introduction?: string;
+  problem_statement?: string;
+  research_questions?: string;
+  hypotheses?: string;
+  location?: string;
+}): Promise<string> {
+  return invoke<string>('propose_new_matter', { payload });
+}
+
+/** Propose a new physical object or phenomenon (Physicist only). */
+export async function proposeNewPhysicalObject(payload: {
+  title: string;
+  introduction?: string;
+  problem_statement?: string;
+  research_questions?: string;
+  hypotheses?: string;
+  location?: string;
+}): Promise<string> {
+  return invoke<string>('propose_new_physical_object', { payload });
+}
+
+/** Get experiment daily logs for experiments matching the current user's role type. */
+export async function getMyExperimentLogs(): Promise<ExperimentLogWithExp[]> {
+  return invoke<ExperimentLogWithExp[]>('get_my_experiment_logs');
+}
+
+/** Submit a security incident report from the Science Division. */
+export async function sciSubmitSecurityReport(payload: {
+  incident_type: string;
+  location: string;
+  description: string;
+  severity: string;
+  occurred_at?: string;
+  recommended_action?: string;
+}): Promise<string> {
+  return invoke<string>('sci_submit_security_report', { payload });
 }

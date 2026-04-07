@@ -29,7 +29,10 @@
   // Appointment form
   let showApptForm = $state(false);
   let apptDate = $state('');
-  let apptLog = $state('');
+  let apptFindings = $state('');
+  let apptNextSteps = $state('');
+  let apptMoodRating = $state('');
+  let apptNotes = $state('');
   let apptError = $state('');
   let apptSaving = $state(false);
 
@@ -61,16 +64,19 @@
   async function submitAppointment() {
     apptError = '';
     apptSaving = true;
-    let logObj: Record<string, unknown> = {};
-    if (apptLog.trim()) {
-      try { logObj = JSON.parse(apptLog); }
-      catch { apptError = 'Log must be valid JSON.'; apptSaving = false; return; }
-    }
     try {
+      const logObj: Record<string, unknown> = {};
+      if (apptFindings.trim()) logObj.findings = apptFindings.trim();
+      if (apptNextSteps.trim()) logObj.next_steps = apptNextSteps.trim();
+      if (apptMoodRating) logObj.mood_rating = Number(apptMoodRating);
+      if (apptNotes.trim()) logObj.notes = apptNotes.trim();
       await psyLogAppointment({ patient_id: patientId, scheduled_at: new Date(apptDate).toISOString(), appointment_log: logObj });
       showApptForm = false;
       apptDate = '';
-      apptLog = '';
+      apptFindings = '';
+      apptNextSteps = '';
+      apptMoodRating = '';
+      apptNotes = '';
       appointments = await psyGetAppointments(patientId);
     } catch (e: unknown) { apptError = e instanceof Error ? e.message : String(e); }
     apptSaving = false;
@@ -119,7 +125,32 @@
     {#if activeTab === 'profile'}
       <div class="card">
         <h3>Patient Profile</h3>
-        <pre class="json">{JSON.stringify(detail.patient_profile, null, 2)}</pre>
+        <div class="profile-grid">
+          {#if detail.patient_profile?.diagnosis}
+            <div class="profile-field"><span class="field-key">Diagnosis</span><span class="field-val">{detail.patient_profile.diagnosis}</span></div>
+          {/if}
+          {#if detail.patient_profile?.age}
+            <div class="profile-field"><span class="field-key">Age</span><span class="field-val">{detail.patient_profile.age}</span></div>
+          {/if}
+          {#if detail.patient_profile?.gender}
+            <div class="profile-field"><span class="field-key">Gender</span><span class="field-val">{detail.patient_profile.gender}</span></div>
+          {/if}
+          {#if detail.patient_profile?.allergies}
+            <div class="profile-field full"><span class="field-key">Allergies</span><span class="field-val">{Array.isArray(detail.patient_profile.allergies) ? (detail.patient_profile.allergies as string[]).join(', ') || 'None' : String(detail.patient_profile.allergies)}</span></div>
+          {/if}
+          {#if detail.patient_profile?.medications}
+            <div class="profile-field full"><span class="field-key">Medications</span><span class="field-val">{Array.isArray(detail.patient_profile.medications) ? (detail.patient_profile.medications as string[]).join(', ') || 'None' : String(detail.patient_profile.medications)}</span></div>
+          {/if}
+          {#if detail.patient_profile?.medical_history}
+            <div class="profile-field full"><span class="field-key">Medical History</span><span class="field-val">{String(detail.patient_profile.medical_history)}</span></div>
+          {/if}
+          {#each Object.entries(detail.patient_profile ?? {}).filter(([k]) => !['diagnosis','age','gender','allergies','medications','medical_history'].includes(k)) as [k, v]}
+            <div class="profile-field"><span class="field-key">{k.replace(/_/g,' ')}</span><span class="field-val">{String(v)}</span></div>
+          {/each}
+          {#if !detail.patient_profile || Object.keys(detail.patient_profile).length === 0}
+            <p class="muted">No profile data recorded.</p>
+          {/if}
+        </div>
         {#if detail.initial_notes}
           <h4>Initial Notes</h4>
           <p class="note-text">{detail.initial_notes}</p>
@@ -143,8 +174,22 @@
             <label class="field-label">Date/Time
               <input class="input" type="datetime-local" bind:value={apptDate} />
             </label>
-            <label class="field-label">Appointment Log (JSON)
-              <textarea class="input ta mono" bind:value={apptLog} rows="4" placeholder="findings: ..., next_steps: ..."></textarea>
+            <label class="field-label">Findings
+              <textarea class="input ta" bind:value={apptFindings} rows="3" placeholder="Clinical observations from this session…"></textarea>
+            </label>
+            <label class="field-label">Next Steps
+              <textarea class="input ta" bind:value={apptNextSteps} rows="2" placeholder="Recommended follow-up actions…"></textarea>
+            </label>
+            <label class="field-label">Mood Rating (1–10)
+              <select class="input" bind:value={apptMoodRating}>
+                <option value="">— Not recorded —</option>
+                {#each Array.from({length:10},(_,i)=>i+1) as n}
+                  <option value={String(n)}>{n}</option>
+                {/each}
+              </select>
+            </label>
+            <label class="field-label">Additional Notes
+              <textarea class="input ta" bind:value={apptNotes} rows="2" placeholder="Any other remarks…"></textarea>
             </label>
             <button class="btn-primary" onclick={submitAppointment} disabled={apptSaving}>
               {apptSaving ? 'Saving…' : 'Save Appointment'}
@@ -156,13 +201,16 @@
           <p class="muted">No appointments yet.</p>
         {:else}
           <table class="tbl">
-            <thead><tr><th>Date</th><th>Status</th><th>Findings</th></tr></thead>
+            <thead><tr><th>Date</th><th>Status</th><th>Mood</th><th>Findings</th><th>Next Steps</th></tr></thead>
             <tbody>
               {#each appointments as a}
+                {@const log = a.appointment_log as Record<string, unknown> | null}
                 <tr>
                   <td>{new Date(a.scheduled_at).toLocaleString()}</td>
                   <td><span class="badge {a.status === 'completed' ? 'badge-achieved' : 'badge-progress'}">{a.status}</span></td>
-                  <td class="json-cell">{a.appointment_log ? JSON.stringify(a.appointment_log) : '—'}</td>
+                  <td class="muted">{log?.mood_rating != null ? `${log.mood_rating}/10` : '—'}</td>
+                  <td class="wrap-cell">{log?.findings ? String(log.findings) : '—'}</td>
+                  <td class="wrap-cell">{log?.next_steps ? String(log.next_steps) : '—'}</td>
                 </tr>
               {/each}
             </tbody>
@@ -249,9 +297,14 @@
   .tbl { width:100%;border-collapse:collapse;font-size:0.8rem; }
   .tbl th { text-align:left;padding:0.5rem 0.6rem;color:#94A3B8;border-bottom:1px solid rgba(58,190,255,0.1); }
   .tbl td { padding:0.5rem 0.6rem;border-bottom:1px solid rgba(255,255,255,0.04); }
-  .json-cell { max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:0.7rem;color:#94A3B8; }
-  .json { background:#0B0F1A;padding:0.6rem;border-radius:4px;font-size:0.75rem;color:#94A3B8;overflow-x:auto;white-space:pre-wrap; }
+  .wrap-cell { max-width:220px;font-size:0.75rem;color:#94A3B8;word-break:break-word; }
   .note-text { font-size:0.8rem;color:#E6EDF3; }
+
+  .profile-grid { display:grid;grid-template-columns:1fr 1fr;gap:0.6rem;margin-bottom:0.8rem; }
+  .profile-field { background:#0B0F1A;border-radius:6px;padding:0.55rem 0.75rem;display:flex;flex-direction:column;gap:0.15rem; }
+  .profile-field.full { grid-column:1/-1; }
+  .field-key { font-size:0.7rem;color:#94A3B8;text-transform:capitalize; }
+  .field-val { font-size:0.82rem;color:#E6EDF3; }
 
   .badge { padding:0.15rem 0.5rem;border-radius:4px;font-size:0.7rem;font-weight:600; }
   .badge-progress { background:rgba(58,190,255,0.15);color:#3ABEFF; }

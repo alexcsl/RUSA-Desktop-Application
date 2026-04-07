@@ -16,7 +16,11 @@
   let selectedUserId = $state('');
   let diagnosis = $state('');
   let notes = $state('');
-  let profileFields = $state('');
+  let profileAge = $state('');
+  let profileGender = $state('');
+  let profileAllergies = $state('');
+  let profileMedications = $state('');
+  let profileMedicalHistory = $state('');
   let loading = $state(true);
   let saving = $state(false);
   let error = $state('');
@@ -42,12 +46,13 @@
     error = '';
     success = '';
 
-    let profileObj: Record<string, unknown> = {};
+    const profileObj: Record<string, unknown> = {};
     if (diagnosis) profileObj.diagnosis = diagnosis;
-    if (profileFields.trim()) {
-      try { profileObj = { ...profileObj, ...JSON.parse(profileFields) }; }
-      catch { error = 'Profile fields must be valid JSON.'; saving = false; return; }
-    }
+    if (profileAge.trim()) profileObj.age = Number(profileAge);
+    if (profileGender.trim()) profileObj.gender = profileGender.trim();
+    if (profileAllergies.trim()) profileObj.allergies = profileAllergies.split(',').map((s) => s.trim()).filter(Boolean);
+    if (profileMedications.trim()) profileObj.medications = profileMedications.split(',').map((s) => s.trim()).filter(Boolean);
+    if (profileMedicalHistory.trim()) profileObj.medical_history = profileMedicalHistory.trim();
 
     try {
       const result = await psyCreatePatientRecord({
@@ -103,8 +108,20 @@
     <label class="field-label">Initial Notes
       <textarea class="input ta" bind:value={notes} rows="3" placeholder="Observations, referral notes…"></textarea>
     </label>
-    <label class="field-label">Additional Profile (JSON)
-      <textarea class="input ta mono" bind:value={profileFields} rows="3" placeholder="allergies: [], medications: []"></textarea>
+    <label class="field-label">Age
+      <input class="input" type="number" min="1" max="150" bind:value={profileAge} placeholder="e.g. 34" />
+    </label>
+    <label class="field-label">Gender
+      <input class="input" type="text" bind:value={profileGender} placeholder="e.g. Male, Female, Non-binary…" />
+    </label>
+    <label class="field-label">Allergies <span class="hint">(comma-separated)</span>
+      <input class="input" type="text" bind:value={profileAllergies} placeholder="e.g. Penicillin, Latex" />
+    </label>
+    <label class="field-label">Medications <span class="hint">(comma-separated)</span>
+      <input class="input" type="text" bind:value={profileMedications} placeholder="e.g. Sertraline 50mg, Melatonin" />
+    </label>
+    <label class="field-label">Medical History
+      <textarea class="input ta" bind:value={profileMedicalHistory} rows="3" placeholder="Previous diagnoses, surgeries, conditions…"></textarea>
     </label>
   </section>
 
@@ -122,8 +139,8 @@
   .input { width:100%;padding:0.45rem 0.6rem;background:#1F2937;color:#E6EDF3;border:1px solid #374151;border-radius:4px;font-size:0.8rem;margin-bottom:0.5rem;box-sizing:border-box; }
   .input:focus { outline:none;border-color:#3ABEFF; }
   .ta { resize:vertical; }
-  .mono { font-family:'Cascadia Code','Fira Mono',monospace;font-size:0.75rem; }
   .field-label { display:block;font-size:0.75rem;color:#94A3B8;margin-bottom:0.6rem; }
+  .hint { color:#475569;font-size:0.7rem;margin-left:0.25rem; }
 
   .user-list { max-height:250px;overflow-y:auto;border:1px solid rgba(255,255,255,0.05);border-radius:4px; }
   .user-row { display:flex;align-items:center;gap:0.5rem;padding:0.4rem 0.6rem;cursor:pointer;font-size:0.8rem;border-bottom:1px solid rgba(255,255,255,0.03); }

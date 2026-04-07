@@ -13,10 +13,10 @@
 
   let { children } = $props();
   let user: SessionUser | null = $state(null);
-  currentUser.subscribe((v) => (user = v));
+  const unsubUser = currentUser.subscribe((v) => (user = v));
 
   let pathVal = $state('');
-  page.subscribe((p) => (pathVal = p.url.pathname));
+  const unsubPage = page.subscribe((p) => (pathVal = p.url.pathname));
 
   let notifications: NotificationItem[] = $state([]);
   let showNotifs = $state(false);
@@ -51,6 +51,8 @@
   });
 
   onDestroy(() => {
+    unsubUser();
+    unsubPage();
     if (pollTimer) clearInterval(pollTimer);
   });
 
@@ -127,18 +129,33 @@
     return n.type_ === 'broadcast:emergency' || n.type_ === 'broadcast:security';
   }
 
-  interface NavLink { label: string; href: string; }
+  interface NavLink { label: string; href: string; exact?: boolean; separator?: boolean; }
 
   const navLinks: NavLink[] = [
-    { label: 'Dashboard', href: '/admin' },
+    { label: 'Dashboard', href: '/admin', exact: true },
     { label: 'Personnel', href: '/admin/personnel' },
     { label: 'Audit Log', href: '/admin/audit' },
     { label: 'Vote Management', href: '/admin/votes' },
     { label: 'Directors Votes', href: '/admin/directors-votes' },
     { label: 'Accounts', href: '/admin/accounts' },
     { label: 'Relocate', href: '/admin/relocate' },
-    { label: 'Data Request', href: '/data/request/new' },
-    { label: 'Messages', href: '/messaging/inbox?channel=general' },
+    { label: 'Reposition', href: '/admin/reposition' },
+    { label: 'Personnel Logs', href: '/directors/personnel-logs' },
+    { label: 'Data Request', href: '/data/request/new', exact: true },
+    { label: 'My Requests', href: '/data/request/mine' },
+    { label: '— Subsystems —', href: '', separator: true },
+    { label: 'Psychiatry', href: '/psychiatry/patients' },
+    { label: 'Engineers', href: '/engineers/experiments' },
+    { label: 'Scientists', href: '/scientists/experiments' },
+    { label: 'Medical', href: '/medical/treatment-log' },
+    { label: 'Security', href: '/security/incidents' },
+    { label: 'Sanitary', href: '/sanitary/head/scheduling' },
+    { label: 'Settlers', href: '/settlers/tasks' },
+    { label: 'Astronauts', href: '/astronauts/missions' },
+    { label: 'Data Analysts', href: '/data/analyst/inbox' },
+    { label: 'Directors', href: '/directors/votes' },
+    { label: 'Station',     href: '/station/overview' },
+    { label: 'My Profile', href: '/me/profile' },
   ];
 
   async function handleLogout() { await logout(); goto('/auth'); }
@@ -192,9 +209,13 @@
   <div class="body">
     <nav class="side-nav">
       {#each navLinks as link}
-        <a href={link.href} class:active={pathVal.startsWith(link.href)}>
-          {link.label}
-        </a>
+        {#if link.separator}
+          <div class="nav-sep">{link.label}</div>
+        {:else}
+          <a href={link.href} class:active={link.exact ? pathVal === link.href : pathVal.startsWith(link.href)}>
+            {link.label}
+          </a>
+        {/if}
       {/each}
     </nav>
     <main class="main-content">
@@ -242,5 +263,6 @@
   .side-nav a { display:block;padding:0.55rem 0.75rem;margin-bottom:0.15rem;border-radius:6px;color:#94A3B8;text-decoration:none;font-size:0.8rem; }
   .side-nav a:hover { color:#E6EDF3;background:rgba(239,68,68,0.05); }
   .side-nav a.active { color:#EF4444;background:rgba(239,68,68,0.1); }
+  .nav-sep { padding:0.5rem 0.75rem 0.2rem;font-size:0.65rem;color:#4B5563;text-transform:uppercase;letter-spacing:0.08em;margin-top:0.3rem; }
   .main-content { flex:1;overflow-y:auto;padding:1.25rem; }
 </style>

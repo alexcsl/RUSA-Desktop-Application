@@ -127,7 +127,7 @@
     return labels[role ?? ''] ?? role ?? '';
   }
 
-  interface NavLink { label: string; href: string; roles: string[]; }
+  interface NavLink { label: string; href: string; roles: string[]; exact?: boolean; }
 
   const navLinks: NavLink[] = [
     // Head of Sanitary
@@ -136,27 +136,31 @@
     { label: 'Inventory Mgmt', href: '/sanitary/head/inventory', roles: ['HeadOfSanitary'] },
     { label: 'Quarterly Scheduling', href: '/sanitary/head/scheduling', roles: ['HeadOfSanitary'] },
     { label: 'Assign Task', href: '/sanitary/head/tasks/new', roles: ['HeadOfSanitary'] },
+    { label: 'All Tasks', href: '/sanitary/head/tasks', roles: ['HeadOfSanitary'] },
     { label: 'Transfer Requests', href: '/sanitary/head/transfers', roles: ['HeadOfSanitary'] },
     { label: 'Division Quotas', href: '/sanitary/head/quotas', roles: ['HeadOfSanitary'] },
     { label: 'Assign Recruit', href: '/sanitary/head/recruits', roles: ['HeadOfSanitary'] },
     // All Sanitary Staff (including Head)
     { label: 'My Tasks', href: '/sanitary/tasks', roles: ['all'] },
     { label: 'My Schedule', href: '/sanitary/schedule', roles: ['all'] },
-    { label: 'Transfer Request', href: '/sanitary/transfer/request', roles: ['all'] },
+    { label: 'Transfer Request', href: '/sanitary/transfer/request', roles: ['InspectorCrew', 'DisposalCrew', 'WastewaterCrew', 'CleanupCrew', 'TransportCrew'] },
     { label: 'Inventory Log', href: '/sanitary/inventory/log', roles: ['all'] },
-    // Inspector Crew
-    { label: 'Inspection Report', href: '/sanitary/inspector/report', roles: ['InspectorCrew', 'HeadOfSanitary'] },
+    { label: 'Divisions', href: '/sanitary/divisions', roles: ['all'] },
+    { label: 'Inspection Reports', href: '/sanitary/inspector/report', roles: ['all'] },
     // Disposal Crew
     { label: 'Disposal Docs', href: '/sanitary/disposal/docs', roles: ['DisposalCrew', 'HeadOfSanitary'] },
     // Wastewater Crew
     { label: 'Wastewater Docs', href: '/sanitary/wastewater/docs', roles: ['WastewaterCrew', 'HeadOfSanitary'] },
-    // Cross-role
-    { label: 'Messages', href: '/messaging/inbox?channel=general', roles: ['all'] },
+    // Shared for all roles
+    { label: 'Security Report', href: '/sanitary/security-report', roles: ['all'] },
+    { label: 'Data Request', href: '/data/request/new', roles: ['all'], exact: true },
+    { label: 'My Requests', href: '/data/request/mine', roles: ['all'] },
+    { label: 'My Profile',  href: '/me/profile',        roles: ['all'] },
   ];
 
   function visibleLinks(role: string | undefined): NavLink[] {
     if (!role) return [];
-    return navLinks.filter((l) => l.roles.includes('all') || l.roles.includes(role));
+    return navLinks.filter((l) => role === 'Administrator' || l.roles.includes('all') || l.roles.includes(role));
   }
 
   async function handleLogout() { await logout(); goto('/auth'); }
@@ -209,8 +213,14 @@
 
   <div class="body">
     <nav class="side-nav">
+      {#if user?.role === 'Administrator'}
+        <a href="/admin" class="back-link">← Dashboard</a>
+      {/if}
       {#each visibleLinks(user?.role) as link}
-        <a href={link.href} class:active={pathVal.startsWith(link.href)}>
+        <a
+          href={link.href}
+          class:active={link.exact ? pathVal === link.href : pathVal.startsWith(link.href)}
+        >
           {link.label}
         </a>
       {/each}
@@ -258,7 +268,9 @@
   .body { display:flex;flex:1;overflow:hidden; }
   .side-nav { width:200px;min-width:160px;background:#111827;border-right:1px solid rgba(58,190,255,0.1);overflow-y:auto;padding:0.5rem; }
   .side-nav a { display:block;padding:0.55rem 0.75rem;margin-bottom:0.15rem;border-radius:6px;color:#94A3B8;text-decoration:none;font-size:0.8rem; }
-  .side-nav a:hover { color:#E6EDF3;background:rgba(58,190,255,0.05); }
-  .side-nav a.active { color:#3ABEFF;background:rgba(58,190,255,0.1); }
+  .side-nav a:hover { color:#E6EDF3;background:rgba(245,158,11,0.05); }
+  .side-nav a.active { color:#F59E0B;background:rgba(245,158,11,0.1); }
   .main-content { flex:1;overflow-y:auto;padding:1.25rem; }
+  .back-link { display:block;padding:0.45rem 0.75rem;margin-bottom:0.4rem;border-radius:6px;color:#EF4444;text-decoration:none;font-size:0.75rem;border:1px solid rgba(239,68,68,0.2);background:rgba(239,68,68,0.05); }
+  .back-link:hover { background:rgba(239,68,68,0.12);border-color:rgba(239,68,68,0.4); }
 </style>

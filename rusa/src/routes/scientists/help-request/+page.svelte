@@ -1,6 +1,6 @@
 <!--
   /scientists/help-request — UC-GS-02: Cross-Department Help Request
-  Available to: Physicist, Chemist, Biologist (not Mathematician per spec)
+  Available to: Physicist, Chemist, Biologist, Mathematician
 -->
 <script lang="ts">
   import { submitHelpRequest } from '$lib/stores/scientists';

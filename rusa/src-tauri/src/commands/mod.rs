@@ -1,6 +1,7 @@
 pub mod administrator;
 pub mod astronauts;
 pub mod auth;
+pub mod da_operations;
 pub mod data_analysts;
 pub mod directors;
 pub mod engineers;

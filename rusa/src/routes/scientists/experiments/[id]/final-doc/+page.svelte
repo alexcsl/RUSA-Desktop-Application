@@ -5,18 +5,20 @@
 <script lang="ts">
   import { page } from '$app/stores';
   import { submitFinalDocument } from '$lib/stores/scientists';
+  import { currentUser } from '$lib/stores/auth';
   import { goto } from '$app/navigation';
 
   let experimentId = $state('');
   page.subscribe((p) => (experimentId = p.params.id ?? ''));
 
-  /* Auto-determine doc type from user role (injected by layout) */
-  let docType = $state('matter'); // default — overridden below
-  let role: string | null = null;
-  try { role = localStorage.getItem('user_role'); } catch {}
-  if (role === 'Physicist')  docType = 'physical_object';
-  if (role === 'Chemist')    docType = 'matter';
-  if (role === 'Biologist')  docType = 'species';
+  /* Auto-determine doc type from user role */
+  let userRole = $state('');
+  currentUser.subscribe((u) => { userRole = u?.role ?? ''; });
+  let docType = $derived(
+    userRole === 'Physicist' ? 'physical_object' :
+    userRole === 'Biologist' ? 'species' :
+    'matter'
+  );
 
   /* -- Common fields -- */
   let name = $state('');

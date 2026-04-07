@@ -12,6 +12,7 @@ export interface DivisionRow {
   id: string;
   name: string;
   quota: number;
+  staff_count: number;
 }
 
 export interface SetQuotaPayload {
@@ -450,4 +451,19 @@ export async function sanSubmitExpenditureReport(payload: SubmitExpenditurePaylo
 
 export async function sanGetExpenditureReports(): Promise<ExpenditureReportSummary[]> {
   return invoke<ExpenditureReportSummary[]>('san_get_expenditure_reports');
+}
+
+// -- Security Report (all sanitary staff) --
+
+export interface SanSubmitSecurityReportPayload {
+  incident_type: string;
+  location: string;
+  severity: string;
+  description: string;
+  occurred_at?: string;
+  recommended_action?: string;
+}
+
+export async function sanSubmitSecurityReport(payload: SanSubmitSecurityReportPayload): Promise<string> {
+  return invoke<string>('san_submit_security_report', { payload });
 }

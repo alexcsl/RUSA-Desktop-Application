@@ -9,7 +9,6 @@
   import { goto } from '$app/navigation';
   import { page } from '$app/stores';
   import { getNotifications, markNotificationRead, type NotificationItem } from '$lib/stores/directors';
-  import { getDefaultRoute } from '$lib/routing';
   import { onMount, onDestroy } from 'svelte';
 
   let { children } = $props();
@@ -82,9 +81,14 @@
 
   const navLinks: NavLink[] = [
     { label: 'Analyst Inbox', href: '/data/analyst/inbox', analystOnly: true },
+    { label: 'Data Browser', href: '/data/analyst/browse', analystOnly: true },
+    { label: 'Write Data', href: '/data/analyst/write', analystOnly: true },
+    { label: 'Data Lab', href: '/data/analyst/lab', analystOnly: true },
+    { label: 'Security Report', href: '/data/analyst/security-report', analystOnly: true },
     { label: 'Submit Request', href: '/data/request/new', analystOnly: false },
     { label: 'My Requests', href: '/data/request/mine', analystOnly: false },
-    { label: 'Messages', href: '/messaging/inbox?channel=general', analystOnly: false },
+    { label: 'Messages',    href: '/messaging/inbox?channel=general', analystOnly: false },
+    { label: 'My Profile', href: '/me/profile',                       analystOnly: false },
   ];
 
   function visibleLinks(): NavLink[] {
@@ -126,14 +130,14 @@
 
   <div class="body">
     <nav class="side-nav">
+      {#if user?.role === 'Administrator'}
+        <a href="/admin" class="back-link">← Dashboard</a>
+      {/if}
       {#each visibleLinks() as link}
         <a href={link.href} class:active={pathVal.startsWith(link.href.split('?')[0])}>
           {link.label}
         </a>
       {/each}
-      {#if user}
-        <a href={getDefaultRoute(user.role)} class="back-link">← Back to Dashboard</a>
-      {/if}
     </nav>
     <main class="main-content">
       {@render children()}
@@ -165,7 +169,7 @@
   .side-nav a { display:block;padding:0.55rem 0.75rem;margin-bottom:0.15rem;border-radius:6px;color:#94A3B8;text-decoration:none;font-size:0.8rem; }
   .side-nav a:hover { color:#E6EDF3;background:rgba(58,190,255,0.05); }
   .side-nav a.active { color:#3ABEFF;background:rgba(58,190,255,0.1); }
-  .side-nav .back-link { margin-top:auto;border-top:1px solid rgba(58,190,255,0.1);padding-top:0.6rem;color:#F59E0B;font-size:0.75rem; }
-  .side-nav .back-link:hover { color:#FBBF24;background:rgba(245,158,11,0.08); }
+  .back-link { display:block;padding:0.45rem 0.75rem;margin-bottom:0.4rem;border-radius:6px;color:#EF4444;text-decoration:none;font-size:0.75rem;border:1px solid rgba(239,68,68,0.2);background:rgba(239,68,68,0.05); }
+  .back-link:hover { background:rgba(239,68,68,0.12);border-color:rgba(239,68,68,0.4); }
   .main-content { flex:1;overflow-y:auto;padding:1.25rem; }
 </style>

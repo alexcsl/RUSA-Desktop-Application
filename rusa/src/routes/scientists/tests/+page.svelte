@@ -4,6 +4,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { getApprovedTests, getMyTestProposals, type ApprovedTest, type TestProposal } from '$lib/stores/scientists';
+  import { currentUser } from '$lib/stores/auth';
 
   let tests = $state<ApprovedTest[]>([]);
   let proposals = $state<TestProposal[]>([]);
@@ -12,13 +13,13 @@
   let tab: 'approved' | 'proposals' = $state('approved');
 
   /* scope auto-set from role */
-  let scope = $state('chemical');
-  try {
-    const r = localStorage.getItem('user_role');
-    if (r === 'Physicist') scope = 'physical';
-    if (r === 'Chemist')   scope = 'chemical';
-    if (r === 'Biologist')  scope = 'biological';
-  } catch {}
+  let role = $state('');
+  currentUser.subscribe((u) => { role = u?.role ?? ''; });
+  let scope = $derived(
+    role === 'Physicist' ? 'physical' :
+    role === 'Biologist' ? 'biological' :
+    'chemical'
+  );
 
   onMount(async () => {
     try {

@@ -102,6 +102,66 @@ export async function processDataRequest(
   });
 }
 
+// ── UC-DA-05: Data Browse & Operations ───────────────────────────────────────
+
+export interface BrowseDataPayload {
+  table_name: string;
+  limit?: number;
+  offset?: number;
+  filter_column?: string;
+  filter_value?: string;
+}
+
+export interface ComputeOperationPayload {
+  operation: 'avg' | 'mode' | 'median' | 'variance' | 'max' | 'min' | 'filter' | 'pivot' | 'graph';
+  data: Record<string, unknown>[];
+  column: string;
+  filter_column?: string;
+  filter_value?: string;
+  agg_column?: string;
+}
+
+export interface ComputeResult {
+  operation: string;
+  column: string;
+  result: unknown;
+  row_count: number;
+}
+
+/** UC-DA-03: Browse any allowed non-medical table. */
+export async function browseData(
+  payload: BrowseDataPayload,
+): Promise<Record<string, unknown>[]> {
+  return invoke<Record<string, unknown>[]>('da_browse_data', { payload });
+}
+
+/** UC-DA-05: Apply a statistical operation to a JSON dataset. */
+export async function computeOperation(
+  payload: ComputeOperationPayload,
+): Promise<ComputeResult> {
+  return invoke<ComputeResult>('da_compute_operation', { payload });
+}
+
+/** UC-DA-04: Insert a new row into any allowed non-medical table. */
+export async function daWriteData(payload: {
+  table_name: string;
+  row_data: Record<string, unknown>;
+}): Promise<void> {
+  await invoke('da_write_data', { payload });
+}
+
+/** UC-DA-06: Submit a security incident report (DataAnalyst). */
+export async function daSubmitSecurityReport(payload: {
+  incident_type: string;
+  location: string;
+  description: string;
+  severity: string;
+  occurred_at?: string;
+  recommended_action?: string;
+}): Promise<string> {
+  return invoke<string>('da_submit_security_report', { payload });
+}
+
 /** UC-DA-03: Submit a data response (with optional spreadsheet file). */
 export async function submitDataResponse(
   requestId: string,

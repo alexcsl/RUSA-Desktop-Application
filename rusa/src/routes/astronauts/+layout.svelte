@@ -100,11 +100,13 @@
   interface NavLink { label: string; href: string; }
 
   const navLinks: NavLink[] = [
-    { label: 'Missions', href: '/astronauts/missions' },
-    { label: 'Journal', href: '/astronauts/journal' },
-    { label: 'Broadcast Request', href: '/astronauts/broadcast-request' },
-    { label: 'Submit Data Request', href: '/data/request/new' },
-    { label: 'Messages', href: '/messaging/inbox?channel=general' },
+    { label: 'Missions',        href: '/astronauts/missions' },
+    { label: 'Journal',         href: '/astronauts/journal' },
+    { label: 'Colleagues',      href: '/astronauts/colleagues' },
+    { label: 'Data Request',    href: '/data/request/new' },
+    { label: 'My Requests',     href: '/data/request/mine' },
+    { label: 'Security Report', href: '/astronauts/security-report' },
+    { label: 'My Profile',      href: '/me/profile' },
   ];
 
   async function handleLogout() { await logout(); goto('/auth'); }
@@ -157,8 +159,11 @@
 
   <div class="body">
     <nav class="side-nav">
+      {#if user?.role === 'Administrator'}
+        <a href="/admin" class="back-link">← Dashboard</a>
+      {/if}
       {#each navLinks as link}
-        <a href={link.href} class:active={pathVal.startsWith(link.href)}>
+        <a href={link.href} class:active={link.href === '/data/request/new' ? pathVal === link.href : pathVal.startsWith(link.href)}>
           {link.label}
         </a>
       {/each}
@@ -209,4 +214,6 @@
   .side-nav a:hover { color:#E6EDF3;background:rgba(58,190,255,0.05); }
   .side-nav a.active { color:#3ABEFF;background:rgba(58,190,255,0.1); }
   .main-content { flex:1;overflow-y:auto;padding:1.25rem; }
+  .back-link { display:block;padding:0.45rem 0.75rem;margin-bottom:0.4rem;border-radius:6px;color:#EF4444;text-decoration:none;font-size:0.75rem;border:1px solid rgba(239,68,68,0.2);background:rgba(239,68,68,0.05); }
+  .back-link:hover { background:rgba(239,68,68,0.12);border-color:rgba(239,68,68,0.4); }
 </style>

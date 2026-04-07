@@ -1176,3 +1176,96 @@ pub async fn eng_get_my_help_requests(
 
     Ok(result)
 }
+
+// ── Security Report (UC-ENG-SEC-01) ──────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct EngSecurityReportPayload {
+    pub incident_type: String,
+    pub location: String,
+    pub description: String,
+    pub severity: String,
+    pub occurred_at: Option<String>,
+    pub recommended_action: Option<String>,
+}
+
+/// Submit a security incident report to the Galactic Security team.
+///
+/// Engineers may encounter security-relevant findings during field experiments.
+/// Creates an `incident_reports` row with `source='external_report'` and
+/// notifies all active GalacticSecurityHead users.
+///
+/// **Access:** AgriculturalEngineer, BiologicalEngineer, Administrator.
+#[tauri::command]
+pub async fn eng_submit_security_report(
+    state: State<'_, AppState>,
+    payload: EngSecurityReportPayload,
+) -> Result<Uuid, AppError> {
+    let user = crate::require_auth_any!(state, [
+        Role::AgriculturalEngineer, Role::BiologicalEngineer, Role::Administrator
+    ]);
+
+    if !["low", "medium", "high", "critical"].contains(&payload.severity.as_str()) {
+        return Err(AppError::Internal(
+            "severity must be low, medium, high, or critical".into(),
+        ));
+    }
+
+    let occurred_at: Option<DateTime<Utc>> = payload
+        .occurred_at
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .and_then(|s| s.parse::<DateTime<Utc>>().ok());
+
+    let row: (Uuid,) = sqlx::query_as(
+        r#"INSERT INTO incident_reports
+               (reported_by, source, incident_type, location, occurred_at,
+                description, severity, recommended_action)
+           VALUES ($1, 'external_report', $2, $3, $4, $5, $6, $7)
+           RETURNING id"#,
+    )
+    .bind(user.id)
+    .bind(&payload.incident_type)
+    .bind(&payload.location)
+    .bind(occurred_at)
+    .bind(&payload.description)
+    .bind(&payload.severity)
+    .bind(&payload.recommended_action)
+    .fetch_one(&state.db_pool)
+    .await?;
+
+    // Notify all active GalacticSecurityHead users
+    let _ = sqlx::query(
+        r#"INSERT INTO notifications (user_id, type, payload)
+           SELECT u.id, 'report:received', $1::jsonb
+           FROM users u
+           JOIN roles r ON r.id = u.role_id
+           WHERE r.name = 'GalacticSecurityHead'
+             AND u.deleted_at IS NULL AND u.is_active = true"#,
+    )
+    .bind(serde_json::json!({
+        "report_id": row.0,
+        "from": user.full_name,
+        "incident_type": payload.incident_type,
+        "severity": payload.severity,
+    }))
+    .execute(&state.db_pool)
+    .await;
+
+    write_audit_log(
+        &state.db_pool,
+        "incident_reports",
+        row.0,
+        AuditOperation::Create,
+        user.id,
+        None,
+        Some(serde_json::json!({
+            "source": "external_report",
+            "incident_type": payload.incident_type,
+            "severity": payload.severity,
+        })),
+    )
+    .await?;
+
+    Ok(row.0)
+}

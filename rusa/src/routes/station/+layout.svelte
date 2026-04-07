@@ -113,17 +113,22 @@
     return n.type_ === 'broadcast:emergency' || n.type_ === 'broadcast:security';
   }
 
-  interface NavLink { label: string; href: string; }
+  interface NavLink { label: string; href: string; exact?: boolean; }
 
   const navLinks: NavLink[] = [
-    { label: 'Security Report',     href: '/station/security-report' },
-    { label: 'Add to Archive',      href: '/station/archive/new' },
-    { label: 'View Archive',        href: '/station/archive' },
+    { label: 'Overview',            href: '/station/overview' },
+    { label: 'Findings Report',     href: '/station/security-report' },
+    { label: 'Archive (Add)',       href: '/station/archive/new' },
+    { label: 'Archive (View)',      href: '/station/archive', exact: true },
     { label: 'Inventory',           href: '/station/inventory' },
-    { label: 'Supply Request',      href: '/station/supply-request' },
+    { label: 'View Maps',           href: '/station/map/view' },
     { label: 'Map Editor',          href: '/station/map/edit' },
-    { label: 'Personnel',           href: '/station/personnel' },
+    { label: 'Supply Request',      href: '/station/supply-request' },
+    { label: 'Personnel On-Board',  href: '/station/personnel' },
     { label: 'Abandonment',         href: '/station/abandonment' },
+    { label: 'Data Request',        href: '/data/request/new', exact: true },
+    { label: 'My Requests',         href: '/data/request/mine' },
+    { label: 'My Profile',          href: '/me/profile' },
   ];
 
   async function handleLogout() { await logout(); goto('/auth'); }
@@ -198,15 +203,17 @@
 
   <div class="body">
     <nav class="side-nav">
+      {#if user?.role === 'Administrator'}
+        <a href="/admin" class="back-link">← Dashboard</a>
+      {/if}
       {#each navLinks as link}
-        <a href={link.href} class:active={pathVal.startsWith(link.href)}>
+        <a
+          href={link.href}
+          class:active={link.exact ? pathVal === link.href : pathVal.startsWith(link.href)}
+        >
           {link.label}
         </a>
       {/each}
-      <div class="nav-divider"></div>
-      <a href="/station/map" class:active={pathVal === '/station/map'}>
-        🌐 Public Map
-      </a>
     </nav>
     <main class="main-content">
       {@render children()}
@@ -255,6 +262,7 @@
   .side-nav a { display:block;padding:0.55rem 0.75rem;margin-bottom:0.15rem;border-radius:6px;color:#94A3B8;text-decoration:none;font-size:0.8rem; }
   .side-nav a:hover { color:#E6EDF3;background:rgba(58,190,255,0.05); }
   .side-nav a.active { color:#3ABEFF;background:rgba(58,190,255,0.1); }
-  .nav-divider { height:1px;background:rgba(58,190,255,0.1);margin:0.5rem 0.75rem; }
   .main-content { flex:1;overflow-y:auto;padding:1.25rem; }
+  .back-link { display:block;padding:0.45rem 0.75rem;margin-bottom:0.4rem;border-radius:6px;color:#EF4444;text-decoration:none;font-size:0.75rem;border:1px solid rgba(239,68,68,0.2);background:rgba(239,68,68,0.05); }
+  .back-link:hover { background:rgba(239,68,68,0.12);border-color:rgba(239,68,68,0.4); }
 </style>

@@ -77,6 +77,13 @@ export interface PatientListEntry {
   user_id: string;
   patient_name: string;
   care_status: string;
+  psychiatrist_id: string;
+  psychiatrist_name: string;
+}
+
+export interface AssignedPsychiatrist {
+  id: string;
+  full_name: string;
 }
 
 export interface AccessSetting {
@@ -250,4 +257,105 @@ export async function psyGrantScheduleAccess(payload: GrantAccessPayload): Promi
 /** Get current access settings (pending requests + grants) */
 export async function psyGetAccessSettings(): Promise<AccessSetting[]> {
   return invoke('psy_get_access_settings');
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ASSISTANT — Assigned psychiatrists
+// ══════════════════════════════════════════════════════════════════════════════
+
+/** Get the psychiatrist(s) this assistant is assigned to */
+export async function psyGetAssignedPsychiatrists(): Promise<AssignedPsychiatrist[]> {
+  return invoke('psy_get_assigned_psychiatrists');
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PSYCHIATRIST — Assistant assignment management
+// ══════════════════════════════════════════════════════════════════════════════
+
+export interface AssistantAssignment {
+  id: string;
+  assistant_id: string;
+  assistant_name: string;
+  assigned_at: string;
+}
+
+/** Get the assistant currently assigned to this psychiatrist */
+export async function psyGetMyAssistant(): Promise<AssistantAssignment | null> {
+  return invoke('psy_get_my_assistant');
+}
+
+/** Assign a PsychiatristAssistant to this psychiatrist */
+export async function psyAssignAssistant(assistantId: string): Promise<void> {
+  return invoke('psy_assign_assistant', { assistantId });
+}
+
+/** Remove current assistant assignment */
+export async function psyRemoveAssistant(): Promise<void> {
+  return invoke('psy_remove_assistant');
+}
+
+/** Get all PsychiatristAssistant users for the assignment picker */
+export async function psyGetAssistantCandidates(): Promise<UserPickerEntry[]> {
+  return invoke('psy_get_assistant_candidates');
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECURITY REPORT (Psychiatrist + PsychiatristAssistant)
+// ══════════════════════════════════════════════════════════════════════════════
+
+export interface PsySubmitSecurityReportPayload {
+  incident_type: string;
+  location: string;
+  severity: string;
+  description: string;
+  occurred_at?: string;
+  recommended_action?: string;
+}
+
+/** Submit a security incident report to Galactic Security */
+export async function psySubmitSecurityReport(payload: PsySubmitSecurityReportPayload): Promise<string> {
+  return invoke('psy_submit_security_report', { payload });
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PATIENT — own appointments view
+// ══════════════════════════════════════════════════════════════════════════════
+
+export interface PatientAppointmentView {
+  id: string;
+  scheduled_at: string;
+  status: string;
+  psychiatrist_name: string;
+}
+
+export interface PsychiatristAppointmentView {
+  id: string;
+  patient_id: string;
+  patient_name: string;
+  scheduled_at: string;
+  status: string;
+}
+
+export interface GrantedScheduleAppointment {
+  patient_user_id: string;
+  patient_name: string;
+  appointment_id: string;
+  scheduled_at: string;
+  status: string;
+  psychiatrist_name: string;
+}
+
+/** PsychiatristAssistant: view appointments of all users who granted schedule access */
+export async function psyAssistantGetGrantedAppointments(): Promise<GrantedScheduleAppointment[]> {
+  return invoke('psy_assistant_get_granted_appointments');
+}
+
+/** Any authenticated user: see own upcoming appointments as a patient */
+export async function psyPatientGetMyAppointments(): Promise<PatientAppointmentView[]> {
+  return invoke('psy_patient_get_my_appointments');
+}
+
+/** Psychiatrist: get all upcoming appointments across all own patients */
+export async function psyGetPsychiatristUpcoming(): Promise<PsychiatristAppointmentView[]> {
+  return invoke('psy_get_psychiatrist_upcoming');
 }

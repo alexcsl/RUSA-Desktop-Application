@@ -215,6 +215,21 @@ pub async fn med_register_patient(
     .fetch_one(&state.db_pool)
     .await?;
 
+    // Upsert patient_index so cross-department lookup works (FR-9-11)
+    sqlx::query(
+        r#"INSERT INTO patient_index (user_id, department, care_status, medical_staff_id)
+           VALUES ($1, 'medical', 'active', $2)
+           ON CONFLICT (user_id) DO UPDATE SET
+             department = CASE WHEN patient_index.department = 'psychiatry' THEN 'both' ELSE 'medical' END,
+             medical_staff_id = $2,
+             care_status = 'active',
+             last_updated = NOW()"#,
+    )
+    .bind(payload.user_id)
+    .bind(user.id)
+    .execute(&state.db_pool)
+    .await?;
+
     write_audit_log(
         &state.db_pool,
         "medical_patients",
@@ -1156,4 +1171,100 @@ pub async fn med_get_user_lookup(
     .await?;
 
     Ok(users)
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Security Report — Submit incident to Galactic Security
+// ══════════════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Deserialize)]
+pub struct MedSubmitSecurityReportPayload {
+    pub incident_type: String,
+    pub location: String,
+    pub severity: String,
+    pub description: String,
+    pub occurred_at: Option<String>,
+    pub recommended_action: Option<String>,
+}
+
+/// Submit a security incident report to Galactic Security.
+/// Inserts into the shared `incident_reports` table and notifies GalacticSecurityHead users.
+///
+/// **Access:** MedicalStaff, HeadOfMedicine, Administrator.
+#[tauri::command]
+pub async fn med_submit_security_report(
+    state: State<'_, AppState>,
+    payload: MedSubmitSecurityReportPayload,
+) -> Result<Uuid, AppError> {
+    let user = crate::require_auth_any!(state, [Role::MedicalStaff, Role::HeadOfMedicine]);
+
+    let occurred = payload
+        .occurred_at
+        .as_deref()
+        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+        .map(|dt| dt.with_timezone(&Utc));
+
+    let row: (Uuid,) = sqlx::query_as(
+        r#"
+        INSERT INTO incident_reports
+          (reported_by, source, incident_type, location, occurred_at,
+           description, severity, recommended_action)
+        VALUES ($1, 'external_report', $2, $3, $4, $5, $6, $7)
+        RETURNING id
+        "#,
+    )
+    .bind(user.id)
+    .bind(&payload.incident_type)
+    .bind(&payload.location)
+    .bind(occurred)
+    .bind(&payload.description)
+    .bind(&payload.severity)
+    .bind(&payload.recommended_action)
+    .fetch_one(&state.db_pool)
+    .await?;
+
+    // Notify all GalacticSecurityHead users
+    let sec_heads: Vec<(Uuid,)> = sqlx::query_as(
+        r#"
+        SELECT u.id FROM users u
+        JOIN roles r ON r.id = u.role_id
+        WHERE r.name = 'GalacticSecurityHead'
+          AND u.deleted_at IS NULL AND u.is_active = TRUE
+        "#,
+    )
+    .fetch_all(&state.db_pool)
+    .await?;
+
+    for (head_id,) in &sec_heads {
+        let _ = sqlx::query(
+            "INSERT INTO notifications (user_id, type, payload) VALUES ($1, 'report:received', $2)",
+        )
+        .bind(head_id)
+        .bind(serde_json::json!({
+            "report_type": "security_incident",
+            "incident_type": payload.incident_type,
+            "severity": payload.severity,
+            "reported_by": user.full_name,
+            "department": "medical",
+        }))
+        .execute(&state.db_pool)
+        .await;
+    }
+
+    write_audit_log(
+        &state.db_pool,
+        "incident_reports",
+        row.0,
+        AuditOperation::Create,
+        user.id,
+        None,
+        Some(serde_json::json!({
+            "source": "external_report",
+            "incident_type": payload.incident_type,
+            "severity": payload.severity,
+        })),
+    )
+    .await?;
+
+    Ok(row.0)
 }

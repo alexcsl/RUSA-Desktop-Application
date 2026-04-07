@@ -236,3 +236,18 @@ export async function medGetExpenditureReports(): Promise<ExpenditureReportSumma
 export async function medGetUserLookup(): Promise<UserLookupItem[]> {
   return invoke<UserLookupItem[]>('med_get_user_lookup');
 }
+
+// UC-MED-05 / UC-HOM-05: Submit Security Report
+
+export interface MedSubmitSecurityReportPayload {
+  incident_type: string;
+  location: string;
+  severity: string;
+  description: string;
+  occurred_at?: string;
+  recommended_action?: string;
+}
+
+export async function medSubmitSecurityReport(payload: MedSubmitSecurityReportPayload): Promise<string> {
+  return invoke<string>('med_submit_security_report', { payload });
+}

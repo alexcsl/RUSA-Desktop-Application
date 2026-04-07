@@ -156,6 +156,14 @@ pub struct PatientListEntry {
     pub user_id: Uuid,
     pub patient_name: String,
     pub care_status: String,
+    pub psychiatrist_id: Uuid,
+    pub psychiatrist_name: String,
+}
+
+#[derive(Debug, Serialize, FromRow)]
+pub struct AssignedPsychiatrist {
+    pub id: Uuid,
+    pub full_name: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, FromRow)]
@@ -690,20 +698,17 @@ pub async fn psy_get_patient_index(
 // PSYCHIATRIST ASSISTANT COMMANDS
 // ══════════════════════════════════════════════════════════════════════════════
 
-/// Helper: get the psychiatrist that this assistant works with
-/// (We assume an assistant is associated with a psychiatrist at the same base location)
-/// In this implementation, assistant can see patients of ALL psychiatrists at same base.
-/// For simplicity, we link via base_location_id.
+/// Helper: get the psychiatrist(s) this assistant is explicitly assigned to.
+/// Uses the psychiatrist_assistant_assignments table (UNIQUE on psychiatrist_id)
+/// which enforces FR-7-09: each psychiatrist can have at most one assistant.
 async fn get_assistant_psychiatrists(
     pool: &sqlx::PgPool,
     assistant_id: Uuid,
 ) -> Result<Vec<Uuid>, AppError> {
     let rows: Vec<(Uuid,)> = sqlx::query_as(
-        r#"SELECT p.id FROM users p
-           JOIN roles r ON r.id = p.role_id
-           JOIN users a ON a.base_location_id = p.base_location_id
-           WHERE a.id = $1 AND r.name = 'Psychiatrist'
-             AND p.deleted_at IS NULL AND a.deleted_at IS NULL"#,
+        r#"SELECT psychiatrist_id
+           FROM psychiatrist_assistant_assignments
+           WHERE assistant_id = $1 AND deleted_at IS NULL"#,
     )
     .bind(assistant_id)
     .fetch_all(pool)
@@ -842,9 +847,11 @@ pub async fn psy_assistant_get_patients(
 
     let rows = sqlx::query_as::<_, PatientListEntry>(
         r#"SELECT pp.id, pp.user_id, u.full_name AS patient_name,
-                  COALESCE(pi.care_status, 'active') AS care_status
+                  COALESCE(pi.care_status, 'active') AS care_status,
+                  pp.psychiatrist_id, pu.full_name AS psychiatrist_name
            FROM psychiatric_patients pp
            JOIN users u ON u.id = pp.user_id
+           JOIN users pu ON pu.id = pp.psychiatrist_id
            LEFT JOIN patient_index pi ON pi.user_id = pp.user_id
            WHERE pp.psychiatrist_id = ANY($1) AND pp.deleted_at IS NULL
            ORDER BY u.full_name"#,
@@ -1072,6 +1079,396 @@ pub async fn psy_get_access_settings(
             let _: Result<(), _> = conn.set_ex(&cache_key, &json, 3600).await;
         }
     }
+
+    Ok(rows)
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ASSISTANT — Assigned psychiatrist lookup
+// ══════════════════════════════════════════════════════════════════════════════
+
+/// Get the psychiatrist(s) this assistant is assigned to.
+/// Used by the UI to auto-populate the booking flow without requiring a UUID.
+///
+/// **Access:** PsychiatristAssistant, Administrator.
+#[tauri::command]
+pub async fn psy_get_assigned_psychiatrists(
+    state: State<'_, AppState>,
+) -> Result<Vec<AssignedPsychiatrist>, AppError> {
+    let user = crate::require_auth_any!(state, [Role::PsychiatristAssistant, Role::Administrator]);
+    let pool = &state.db_pool;
+
+    let rows = sqlx::query_as::<_, AssignedPsychiatrist>(
+        r#"SELECT u.id, u.full_name
+           FROM psychiatrist_assistant_assignments paa
+           JOIN users u ON u.id = paa.psychiatrist_id
+           WHERE paa.assistant_id = $1 AND paa.deleted_at IS NULL
+             AND u.deleted_at IS NULL
+           ORDER BY u.full_name"#,
+    )
+    .bind(user.id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows)
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PSYCHIATRIST — ASSISTANT ASSIGNMENT MANAGEMENT
+// ══════════════════════════════════════════════════════════════════════════════
+
+/// Struct for the current assistant assignment (used as response type)
+#[derive(Debug, Serialize, FromRow)]
+pub struct AssistantAssignment {
+    pub id: Uuid,
+    pub assistant_id: Uuid,
+    pub assistant_name: String,
+    pub assigned_at: DateTime<Utc>,
+}
+
+/// Get the current assistant assigned to this psychiatrist (if any).
+#[tauri::command]
+pub async fn psy_get_my_assistant(
+    state: State<'_, AppState>,
+) -> Result<Option<AssistantAssignment>, AppError> {
+    let user = crate::require_auth_any!(state, [Role::Psychiatrist, Role::Administrator]);
+    let pool = &state.db_pool;
+
+    let row = sqlx::query_as::<_, AssistantAssignment>(
+        r#"SELECT paa.id, paa.assistant_id, u.full_name AS assistant_name, paa.assigned_at
+           FROM psychiatrist_assistant_assignments paa
+           JOIN users u ON u.id = paa.assistant_id
+           WHERE paa.psychiatrist_id = $1 AND paa.deleted_at IS NULL
+           LIMIT 1"#,
+    )
+    .bind(user.id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row)
+}
+
+/// Assign a PsychiatristAssistant to this psychiatrist.
+/// Replaces any existing assignment (soft-deletes old, inserts new).
+/// Enforces: each psychiatrist can only have one assistant (FR-7-09).
+#[tauri::command]
+pub async fn psy_assign_assistant(
+    state: State<'_, AppState>,
+    assistant_id: Uuid,
+) -> Result<(), AppError> {
+    let user = crate::require_auth_any!(state, [Role::Psychiatrist, Role::Administrator]);
+    let pool = &state.db_pool;
+
+    // Verify the target is actually a PsychiatristAssistant
+    let target: Option<(String,)> = sqlx::query_as(
+        r#"SELECT r.name FROM users u JOIN roles r ON r.id = u.role_id
+           WHERE u.id = $1 AND u.deleted_at IS NULL"#,
+    )
+    .bind(assistant_id)
+    .fetch_optional(pool)
+    .await?;
+
+    let target_role = target.ok_or(AppError::Internal("User not found.".into()))?.0;
+    if target_role != "PsychiatristAssistant" {
+        return Err(AppError::Internal("Target user must be a Psychiatrist Assistant.".into()));
+    }
+
+    // Soft-delete any existing assignment for this psychiatrist
+    sqlx::query(
+        r#"UPDATE psychiatrist_assistant_assignments
+           SET deleted_at = NOW(), deleted_by = $1
+           WHERE psychiatrist_id = $1 AND deleted_at IS NULL"#,
+    )
+    .bind(user.id)
+    .execute(pool)
+    .await?;
+
+    // Insert new assignment
+    let row: (Uuid,) = sqlx::query_as(
+        r#"INSERT INTO psychiatrist_assistant_assignments (psychiatrist_id, assistant_id)
+           VALUES ($1, $2)
+           RETURNING id"#,
+    )
+    .bind(user.id)
+    .bind(assistant_id)
+    .fetch_one(pool)
+    .await?;
+
+    write_audit_log(
+        pool, "psychiatrist_assistant_assignments", row.0, AuditOperation::Create, user.id,
+        None,
+        Some(serde_json::json!({
+            "psychiatrist_id": user.id,
+            "assistant_id": assistant_id,
+        })),
+    )
+    .await?;
+
+    Ok(())
+}
+
+/// Remove the current assistant assignment for this psychiatrist.
+#[tauri::command]
+pub async fn psy_remove_assistant(
+    state: State<'_, AppState>,
+) -> Result<(), AppError> {
+    let user = crate::require_auth_any!(state, [Role::Psychiatrist, Role::Administrator]);
+    let pool = &state.db_pool;
+
+    let result = sqlx::query(
+        r#"UPDATE psychiatrist_assistant_assignments
+           SET deleted_at = NOW(), deleted_by = $1
+           WHERE psychiatrist_id = $1 AND deleted_at IS NULL"#,
+    )
+    .bind(user.id)
+    .execute(pool)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(AppError::Internal("No assistant currently assigned.".into()));
+    }
+
+    write_audit_log(
+        pool, "psychiatrist_assistant_assignments", user.id, AuditOperation::Delete, user.id,
+        None, None,
+    )
+    .await?;
+
+    Ok(())
+}
+
+/// Get all PsychiatristAssistant users — for the assignment picker.
+#[tauri::command]
+pub async fn psy_get_assistant_candidates(
+    state: State<'_, AppState>,
+) -> Result<Vec<UserPickerEntry>, AppError> {
+    let _user = crate::require_auth_any!(state, [Role::Psychiatrist, Role::Administrator]);
+    let pool = &state.db_pool;
+
+    let rows = sqlx::query_as::<_, UserPickerEntry>(
+        r#"SELECT u.id, u.full_name, u.username, r.name AS role_name
+           FROM users u JOIN roles r ON r.id = u.role_id
+           WHERE r.name = 'PsychiatristAssistant' AND u.deleted_at IS NULL
+           ORDER BY u.full_name"#,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows)
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// SECURITY REPORT (Psychiatrist + PsychiatristAssistant)
+// ══════════════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Deserialize)]
+pub struct PsySubmitSecurityReportPayload {
+    pub incident_type: String,
+    pub location: String,
+    pub severity: String,
+    pub description: String,
+    pub occurred_at: Option<String>,
+    pub recommended_action: Option<String>,
+}
+
+/// Submit a security incident report to Galactic Security.
+/// Inserts into the shared `incident_reports` table and notifies GalacticSecurityHead users.
+///
+/// **Access:** Psychiatrist, PsychiatristAssistant, Administrator.
+#[tauri::command]
+pub async fn psy_submit_security_report(
+    state: State<'_, AppState>,
+    payload: PsySubmitSecurityReportPayload,
+) -> Result<Uuid, AppError> {
+    let user = crate::require_auth_any!(state, [Role::Psychiatrist, Role::PsychiatristAssistant]);
+    let pool = &state.db_pool;
+
+    let occurred_at = if let Some(ref s) = payload.occurred_at {
+        Some(
+            s.parse::<DateTime<Utc>>()
+                .map_err(|e| AppError::Internal(format!("Invalid date: {e}")))?,
+        )
+    } else {
+        None
+    };
+
+    let row: (Uuid,) = sqlx::query_as(
+        r#"INSERT INTO incident_reports
+               (reported_by, incident_type, location, severity, description, occurred_at, recommended_action, source)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, 'external_report')
+           RETURNING id"#,
+    )
+    .bind(user.id)
+    .bind(&payload.incident_type)
+    .bind(&payload.location)
+    .bind(&payload.severity)
+    .bind(&payload.description)
+    .bind(occurred_at)
+    .bind(&payload.recommended_action)
+    .fetch_one(pool)
+    .await?;
+
+    // Notify all GalacticSecurityHead users
+    let gsh_users: Vec<(Uuid,)> = sqlx::query_as(
+        r#"SELECT u.id FROM users u JOIN roles r ON r.id = u.role_id
+           WHERE r.name = 'GalacticSecurityHead' AND u.deleted_at IS NULL"#,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    for (gsh_id,) in gsh_users {
+        sqlx::query(
+            r#"INSERT INTO notifications (user_id, type, payload)
+               VALUES ($1, 'security:incident_reported', $2)"#,
+        )
+        .bind(gsh_id)
+        .bind(serde_json::json!({
+            "incident_id": row.0,
+            "reported_by": user.full_name,
+            "incident_type": payload.incident_type,
+            "severity": payload.severity,
+        }))
+        .execute(pool)
+        .await?;
+    }
+
+    write_audit_log(
+        pool,
+        "incident_reports",
+        row.0,
+        AuditOperation::Create,
+        user.id,
+        None,
+        Some(serde_json::json!({
+            "incident_type": payload.incident_type,
+            "severity": payload.severity,
+            "location": payload.location,
+        })),
+    )
+    .await?;
+
+    Ok(row.0)
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PATIENT VIEW — own appointments (no clinical data)
+// ══════════════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Serialize, FromRow)]
+pub struct PatientAppointmentView {
+    pub id: Uuid,
+    pub scheduled_at: DateTime<Utc>,
+    pub status: String,
+    pub psychiatrist_name: String,
+}
+
+/// Any authenticated RUSA user can view their own upcoming appointments as a patient.
+/// Returns only date, status, and psychiatrist name — no clinical data.
+#[tauri::command]
+pub async fn psy_patient_get_my_appointments(
+    state: State<'_, AppState>,
+) -> Result<Vec<PatientAppointmentView>, AppError> {
+    let user_lock = state.current_user.lock().await;
+    let user = user_lock.as_ref().ok_or(AppError::Unauthenticated)?;
+    let user_id = user.id;
+    drop(user_lock);
+    let pool = &state.db_pool;
+    // Find the psychiatric_patient record for this user
+    let rows = sqlx::query_as::<_, PatientAppointmentView>(
+        r#"SELECT pa.id, pa.scheduled_at, pa.status, pu.full_name AS psychiatrist_name
+           FROM psychiatric_appointments pa
+           JOIN psychiatric_patients pp ON pp.id = pa.patient_id
+           JOIN users pu ON pu.id = pa.psychiatrist_id
+           WHERE pp.user_id = $1 AND pa.deleted_at IS NULL
+           ORDER BY pa.scheduled_at ASC"#,
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// PSYCHIATRIST — upcoming appointments across all own patients
+// ══════════════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Serialize, FromRow)]
+pub struct PsychiatristAppointmentView {
+    pub id: Uuid,
+    pub patient_id: Uuid,
+    pub patient_name: String,
+    pub scheduled_at: DateTime<Utc>,
+    pub status: String,
+}
+
+/// Psychiatrist: get all upcoming appointments across all own patients.
+#[tauri::command]
+pub async fn psy_get_psychiatrist_upcoming(
+    state: State<'_, AppState>,
+) -> Result<Vec<PsychiatristAppointmentView>, AppError> {
+    let user = crate::require_auth_any!(state, [Role::Psychiatrist, Role::Administrator]);
+    let pool = &state.db_pool;
+    let rows = sqlx::query_as::<_, PsychiatristAppointmentView>(
+        r#"SELECT pa.id, pa.patient_id, u.full_name AS patient_name,
+                  pa.scheduled_at, pa.status
+           FROM psychiatric_appointments pa
+           JOIN psychiatric_patients pp ON pp.id = pa.patient_id
+           JOIN users u ON u.id = pp.user_id
+           WHERE pa.psychiatrist_id = $1 AND pa.deleted_at IS NULL
+           ORDER BY pa.scheduled_at ASC"#,
+    )
+    .bind(user.id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// ASSISTANT — View schedules of users who granted access
+// ══════════════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Serialize, FromRow)]
+pub struct GrantedScheduleAppointment {
+    pub patient_user_id: Uuid,
+    pub patient_name: String,
+    pub appointment_id: Uuid,
+    pub scheduled_at: DateTime<Utc>,
+    pub status: String,
+    pub psychiatrist_name: String,
+}
+
+/// Returns all upcoming appointments belonging to users who have granted
+/// this assistant schedule access. Enables the assistant to view others'
+/// calendars without selecting a patient first.
+///
+/// **Access:** PsychiatristAssistant, Administrator.
+#[tauri::command]
+pub async fn psy_assistant_get_granted_appointments(
+    state: State<'_, AppState>,
+) -> Result<Vec<GrantedScheduleAppointment>, AppError> {
+    let user = crate::require_auth_any!(state, [Role::PsychiatristAssistant, Role::Administrator]);
+    let pool = &state.db_pool;
+
+    let rows = sqlx::query_as::<_, GrantedScheduleAppointment>(
+        r#"
+        SELECT psa.patient_user_id,
+               u.full_name AS patient_name,
+               pa.id AS appointment_id,
+               pa.scheduled_at,
+               pa.status,
+               pu.full_name AS psychiatrist_name
+        FROM patient_schedule_access psa
+        JOIN users u ON u.id = psa.patient_user_id AND u.deleted_at IS NULL
+        JOIN psychiatric_patients pp ON pp.user_id = psa.patient_user_id AND pp.deleted_at IS NULL
+        JOIN psychiatric_appointments pa ON pa.patient_id = pp.id AND pa.deleted_at IS NULL
+        JOIN users pu ON pu.id = pa.psychiatrist_id
+        WHERE psa.assistant_id = $1 AND psa.granted = true
+        ORDER BY pa.scheduled_at ASC
+        "#,
+    )
+    .bind(user.id)
+    .fetch_all(pool)
+    .await?;
 
     Ok(rows)
 }

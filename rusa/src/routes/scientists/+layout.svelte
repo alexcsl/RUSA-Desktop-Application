@@ -69,31 +69,35 @@
   interface NavLink { label: string; href: string; roles: string[]; }
 
   const navLinks: NavLink[] = [
-    // General Scientist — all roles
-    { label: 'Tasks', href: '/scientists/tasks', roles: ['all'] },
-    { label: 'Help Request', href: '/scientists/help-request', roles: ['Physicist', 'Chemist', 'Biologist'] },
-    // Mathematician only
-    { label: 'Math Results', href: '/scientists/math/results/new', roles: ['Mathematician'] },
-    // Experiment roles (Physicist, Chemist, Biologist)
-    { label: 'Propose Experiment', href: '/scientists/experiments/propose', roles: ['Physicist', 'Chemist', 'Biologist'] },
-    { label: 'Experiments', href: '/scientists/experiments', roles: ['Physicist', 'Chemist', 'Biologist'] },
-    // Tests
-    { label: 'Approved Tests', href: '/scientists/tests', roles: ['Physicist', 'Chemist', 'Biologist'] },
-    { label: 'Propose Test', href: '/scientists/tests/propose', roles: ['Physicist', 'Chemist', 'Biologist'] },
-    // Species (Biologist only)
-    { label: 'Propose Species', href: '/scientists/species/propose', roles: ['Biologist'] },
-    // Archives
-    { label: 'Physical Objects', href: '/scientists/archive/physical_object', roles: ['Physicist'] },
-    { label: 'Matter Archive', href: '/scientists/archive/matter', roles: ['Chemist'] },
-    { label: 'Species Archive', href: '/scientists/archive/species', roles: ['Biologist'] },
-    // Cross-role: data request + messaging
-    { label: 'Submit Data Request', href: '/data/request/new', roles: ['all'] },
-    { label: 'Messages', href: '/messaging/inbox?channel=general', roles: ['all'] },
+    // ── All scientists ──
+    { label: 'Assigned Tasks',        href: '/scientists/tasks',               roles: ['all'] },
+    { label: 'Help Request',          href: '/scientists/help-request',        roles: ['all'] },
+    { label: 'Task Conclusion',       href: '/scientists/tasks/conclude',      roles: ['all'] },
+    { label: 'Data Request',          href: '/data/request/new',               roles: ['all'] },
+    { label: 'My Requests',           href: '/data/request/mine',              roles: ['all'] },
+    { label: 'Security Report',       href: '/scientists/security-report',     roles: ['all'] },
+    // ── Experiment roles: Physicist, Chemist, Biologist ──
+    { label: 'Experiments',           href: '/scientists/experiments',         roles: ['Physicist', 'Chemist', 'Biologist'] },
+    { label: 'Experiment Proposal',   href: '/scientists/experiments/propose', roles: ['Physicist', 'Chemist', 'Biologist'] },
+    { label: 'Experiment Logs',       href: '/scientists/experiments/logs',    roles: ['Physicist', 'Chemist', 'Biologist'] },
+    { label: 'Test',                  href: '/scientists/tests',               roles: ['Physicist', 'Chemist', 'Biologist'] },
+    { label: 'Test Proposal',         href: '/scientists/tests/propose',       roles: ['Physicist', 'Chemist', 'Biologist'] },
+    { label: 'Task Progress Report',  href: '/scientists/tasks/progress',      roles: ['Physicist', 'Chemist', 'Biologist'] },
+    // ── Biologist only ──
+    { label: 'Species Proposal',      href: '/scientists/species/propose',     roles: ['Biologist'] },
+    { label: 'Species',               href: '/scientists/archive/species',     roles: ['Biologist'] },
+    // ── Chemist only ──
+    { label: 'Matter Proposal',       href: '/scientists/matter/propose',      roles: ['Chemist'] },
+    { label: 'Matter',                href: '/scientists/archive/matter',      roles: ['Chemist'] },
+    // ── Physicist only ──
+    { label: 'Object & Phenomenon Proposal', href: '/scientists/physics/propose', roles: ['Physicist'] },
+    { label: 'Object & Phenomenon',   href: '/scientists/archive/physical_object', roles: ['Physicist'] },
+    { label: 'My Profile',            href: '/me/profile',                          roles: ['all'] },
   ];
 
   function visibleLinks(role: string | undefined): NavLink[] {
     if (!role) return [];
-    return navLinks.filter((l) => l.roles.includes('all') || l.roles.includes(role));
+    return navLinks.filter((l) => role === 'Administrator' || l.roles.includes('all') || l.roles.includes(role));
   }
 
   async function handleLogout() { await logout(); goto('/auth'); }
@@ -131,8 +135,11 @@
 
   <div class="body">
     <nav class="side-nav">
+      {#if user?.role === 'Administrator'}
+        <a href="/admin" class="back-link">← Dashboard</a>
+      {/if}
       {#each visibleLinks(user?.role) as link}
-        <a href={link.href} class:active={pathVal.startsWith(link.href)}>
+        <a href={link.href} class:active={pathVal === link.href || (link.href !== '/scientists/tasks' && pathVal.startsWith(link.href))}>
           {link.label}
         </a>
       {/each}
@@ -168,4 +175,6 @@
   .side-nav a:hover { color:#E6EDF3;background:rgba(58,190,255,0.05); }
   .side-nav a.active { color:#3ABEFF;background:rgba(58,190,255,0.1); }
   .main-content { flex:1;overflow-y:auto;padding:1.25rem; }
+  .back-link { display:block;padding:0.45rem 0.75rem;margin-bottom:0.4rem;border-radius:6px;color:#EF4444;text-decoration:none;font-size:0.75rem;border:1px solid rgba(239,68,68,0.2);background:rgba(239,68,68,0.05); }
+  .back-link:hover { background:rgba(239,68,68,0.12);border-color:rgba(239,68,68,0.4); }
 </style>

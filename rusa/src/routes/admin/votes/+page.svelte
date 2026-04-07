@@ -118,35 +118,35 @@
           </table>
         {/if}
 
-        <!-- Admin actions only on open sessions -->
-        {#if isOpen({ ...selected.session, total_yay: selected.session.total_yay, total_nay: selected.session.total_nay, total_abstain: selected.session.total_abstain } as VoteSessionSummary)}
-          <div class="actions">
-            <button class="btn-warn" onclick={() => { showOverride = !showOverride; showTerminate = false; }}>Override</button>
+        <!-- Override available on all sessions; Terminate only on open sessions -->
+        <div class="actions">
+          <button class="btn-warn" onclick={() => { showOverride = !showOverride; showTerminate = false; }}>Override</button>
+          {#if isOpen({ ...selected.session, total_yay: selected.session.total_yay, total_nay: selected.session.total_nay, total_abstain: selected.session.total_abstain } as VoteSessionSummary)}
             <button class="btn-danger" onclick={() => { showTerminate = !showTerminate; showOverride = false; }}>Terminate</button>
+          {/if}
+        </div>
+
+        {#if showOverride}
+          <div class="action-form">
+            <h3>Override Decision</h3>
+            <select bind:value={overrideDecision} class="input">
+              <option value="approved">Approved</option>
+              <option value="denied">Denied</option>
+            </select>
+            <textarea class="textarea" placeholder="Reason..." bind:value={overrideReason} rows="3"></textarea>
+            <button class="btn-primary" onclick={handleOverride}>Confirm Override</button>
           </div>
-
-          {#if showOverride}
-            <div class="action-form">
-              <h3>Override Decision</h3>
-              <select bind:value={overrideDecision} class="input">
-                <option value="approved">Approved</option>
-                <option value="denied">Denied</option>
-              </select>
-              <textarea class="textarea" placeholder="Reason..." bind:value={overrideReason} rows="3"></textarea>
-              <button class="btn-primary" onclick={handleOverride}>Confirm Override</button>
-            </div>
-          {/if}
-
-          {#if showTerminate}
-            <div class="action-form">
-              <h3>Terminate Session</h3>
-              <textarea class="textarea" placeholder="Reason..." bind:value={terminateReason} rows="3"></textarea>
-              <button class="btn-danger" onclick={handleTerminate}>Confirm Termination</button>
-            </div>
-          {/if}
-
-          {#if error}<p class="error">{error}</p>{/if}
         {/if}
+
+        {#if showTerminate}
+          <div class="action-form">
+            <h3>Terminate Session</h3>
+            <textarea class="textarea" placeholder="Reason..." bind:value={terminateReason} rows="3"></textarea>
+            <button class="btn-danger" onclick={handleTerminate}>Confirm Termination</button>
+          </div>
+        {/if}
+
+        {#if error}<p class="error">{error}</p>{/if}
       {:else}
         <div class="empty-state"><p>Select a session to manage.</p></div>
       {/if}

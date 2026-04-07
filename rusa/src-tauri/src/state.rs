@@ -8,11 +8,15 @@ use uuid::Uuid;
 /// Every variant here has a corresponding row in the `roles` table.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Role {
+    AerospaceEngineer,
     AgriculturalEngineer,
     BiologicalEngineer,
     DataAnalyst,
     GalacticSecurityHead,
     GalacticSecurityStaff,
+    PlanetarySecurityHead,
+    SecuritySupervisor,
+    SecurityOfficer,
     Mathematician,
     Physicist,
     Chemist,
@@ -77,11 +81,15 @@ impl Role {
     /// Parses the string value stored in the DB / Redis into a Role.
     pub fn from_str(s: &str) -> Result<Self, String> {
         match s {
+            "AerospaceEngineer" => Ok(Role::AerospaceEngineer),
             "AgriculturalEngineer" => Ok(Role::AgriculturalEngineer),
             "BiologicalEngineer" => Ok(Role::BiologicalEngineer),
             "DataAnalyst" => Ok(Role::DataAnalyst),
             "GalacticSecurityHead" => Ok(Role::GalacticSecurityHead),
             "GalacticSecurityStaff" => Ok(Role::GalacticSecurityStaff),
+            "PlanetarySecurityHead" => Ok(Role::PlanetarySecurityHead),
+            "SecuritySupervisor" => Ok(Role::SecuritySupervisor),
+            "SecurityOfficer" => Ok(Role::SecurityOfficer),
             "Mathematician" => Ok(Role::Mathematician),
             "Physicist" => Ok(Role::Physicist),
             "Chemist" => Ok(Role::Chemist),
@@ -124,11 +132,15 @@ impl Role {
     /// Returns the database string representation (matches `roles.name`).
     pub fn as_str(&self) -> &'static str {
         match self {
+            Role::AerospaceEngineer => "AerospaceEngineer",
             Role::AgriculturalEngineer => "AgriculturalEngineer",
             Role::BiologicalEngineer => "BiologicalEngineer",
             Role::DataAnalyst => "DataAnalyst",
             Role::GalacticSecurityHead => "GalacticSecurityHead",
             Role::GalacticSecurityStaff => "GalacticSecurityStaff",
+            Role::PlanetarySecurityHead => "PlanetarySecurityHead",
+            Role::SecuritySupervisor => "SecuritySupervisor",
+            Role::SecurityOfficer => "SecurityOfficer",
             Role::Mathematician => "Mathematician",
             Role::Physicist => "Physicist",
             Role::Chemist => "Chemist",

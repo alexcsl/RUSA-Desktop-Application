@@ -3,13 +3,13 @@
 -->
 <script lang="ts">
   import { proposeNewTest } from '$lib/stores/scientists';
+  import { currentUser } from '$lib/stores/auth';
   import { goto } from '$app/navigation';
 
   let name = $state('');
   let goal = $state('');
   let procedure = $state('');
   let speciesScope = $state('');
-  let category = $state('chemical');
   let apparatuses = $state('');
   let requiredData = $state('');
   let justification = $state('');
@@ -18,12 +18,13 @@
   let isError = $state(false);
 
   /* Auto-set category from role */
-  try {
-    const r = localStorage.getItem('user_role');
-    if (r === 'Physicist')  category = 'physical';
-    if (r === 'Chemist')    category = 'chemical';
-    if (r === 'Biologist')  category = 'biological';
-  } catch {}
+  let userRole = $state('');
+  currentUser.subscribe((u) => { userRole = u?.role ?? ''; });
+  let category = $derived(
+    userRole === 'Physicist' ? 'physical' :
+    userRole === 'Biologist' ? 'biological' :
+    'chemical'
+  );
 
   async function handleSubmit() {
     if (!name.trim() || !goal.trim()) return;
@@ -35,8 +36,8 @@
         goal,
         procedure: procedure || undefined,
         species_scope: speciesScope || undefined,
-        category,
-        apparatuses: apparatuses ? apparatuses.split(',').map(s => s.trim()).filter(Boolean) : undefined,
+        category: [category],
+        apparatuses: apparatuses || undefined,
         required_data: requiredData || undefined,
         justification: justification || undefined,
       });

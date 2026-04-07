@@ -6,6 +6,8 @@
   let subject = $state('');
   let content = $state('');
   let urgency = $state('high');
+  let targetScope = $state('company_wide');
+  let targetIdsRaw = $state('');
   let rationale = $state('');
 
   let error = $state('');
@@ -21,16 +23,27 @@
     error = ''; success = '';
     if (!subject.trim() || !content.trim()) { error = 'Subject and content are required.'; return; }
 
+    const target_ids: string[] = targetScope === 'company_wide'
+      ? []
+      : targetIdsRaw.split(',').map((s) => s.trim()).filter((s) => s.length > 0);
+
+    if (targetScope !== 'company_wide' && target_ids.length === 0) {
+      error = 'At least one target ID is required for sector or planet scope.';
+      return;
+    }
+
     submitting = true;
     try {
       await secSubmitBroadcastRequest({
         subject,
         content,
+        target_scope: targetScope,
+        target_ids,
         urgency,
         rationale: rationale || undefined,
       });
       success = 'Broadcast request submitted for Guardian review.';
-      subject = ''; content = ''; rationale = '';
+      subject = ''; content = ''; rationale = ''; targetIdsRaw = ''; targetScope = 'company_wide';
       requests = await getMyBroadcastRequests();
     } catch (e: unknown) {
       error = e instanceof Error ? e.message : String(e);
@@ -64,14 +77,36 @@
     <textarea class="textarea" bind:value={content} rows="5" placeholder="Detailed broadcast content…"></textarea>
   </label>
 
-  <label class="field"><span class="label">Urgency</span>
-    <select class="input" bind:value={urgency}>
-      <option value="critical">Critical</option>
-      <option value="high">High</option>
-      <option value="normal">Normal</option>
-      <option value="low">Low</option>
-    </select>
-  </label>
+  <div class="form-row">
+    <label class="field">
+      <span class="label">Target Scope</span>
+      <select class="input" bind:value={targetScope}>
+        <option value="company_wide">Company Wide</option>
+        <option value="sector">Sector</option>
+        <option value="planet">Planet</option>
+        <option value="group">Group</option>
+        <option value="individual">Individual</option>
+      </select>
+    </label>
+    <label class="field">
+      <span class="label">Urgency</span>
+      <select class="input" bind:value={urgency}>
+        <option value="critical">Critical</option>
+        <option value="high">High</option>
+        <option value="normal">Normal</option>
+        <option value="low">Low</option>
+      </select>
+    </label>
+  </div>
+
+  {#if targetScope !== 'company_wide'}
+    <label class="field">
+      <span class="label">Target IDs (UUID, comma-separated) *</span>
+      <input class="input" type="text" bind:value={targetIdsRaw}
+        placeholder="e.g. 3fa85f64-5717-4562-b3fc-2c963f66afa6, …" />
+      <span class="hint">Enter the UUIDs of the target sectors, planets, groups, or individuals.</span>
+    </label>
+  {/if}
 
   <label class="field"><span class="label">Rationale</span>
     <textarea class="textarea" bind:value={rationale} rows="2" placeholder="Why is this broadcast needed?"></textarea>
@@ -113,6 +148,8 @@
   .textarea { resize:vertical; }
   .btn-primary { padding:0.5rem 1.25rem;background:linear-gradient(135deg,#3ABEFF 0%,#8B5CF6 100%);border:none;border-radius:6px;color:white;font-weight:600;cursor:pointer;font-size:0.8rem;align-self:flex-start; }
   .btn-primary:disabled { opacity:0.5;cursor:not-allowed; }
+  .form-row { display:grid;grid-template-columns:1fr 1fr;gap:0.6rem; }
+  .hint { font-size:0.65rem;color:#6B7280; }
   .error { color:#EF4444;font-size:0.8rem;margin:0; }
   .success { color:#10B981;font-size:0.8rem;margin:0; }
   .section-title { font-family:'Orbitron',sans-serif;font-size:0.85rem;color:#8B5CF6;margin:1.25rem 0 0.5rem; }

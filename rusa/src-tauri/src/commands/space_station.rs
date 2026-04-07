@@ -1408,3 +1408,79 @@ pub async fn sst_get_public_stations(
 
     Ok(stations)
 }
+
+/// Get a signed URL + annotations for any map (published or draft).
+/// Allows authenticated SpaceStationSettlers to view all uploaded maps.
+///
+/// **Access:** SpaceStationSettler, Administrator
+#[tauri::command]
+pub async fn sst_get_map_with_url(
+    state: State<'_, AppState>,
+    map_id: Uuid,
+) -> Result<PublishedMapData, AppError> {
+    let _user = crate::require_auth_any!(state, [Role::SpaceStationSettler, Role::Administrator]);
+
+    let map = sqlx::query_as::<_, StationMapSummary>(
+        r#"SELECT id, station_id, image_storage_path, image_width, image_height,
+                  is_published, published_at, created_at
+           FROM station_maps
+           WHERE id = $1 AND deleted_at IS NULL"#,
+    )
+    .bind(map_id)
+    .fetch_optional(&state.db_pool)
+    .await?
+    .ok_or_else(|| AppError::Internal("Map not found.".into()))?;
+
+    let station_name: (String,) = sqlx::query_as(
+        r#"SELECT name FROM space_stations WHERE id = $1"#,
+    )
+    .bind(map.station_id)
+    .fetch_one(&state.db_pool)
+    .await?;
+
+    let annotations = sqlx::query_as::<_, MapAnnotation>(
+        r#"SELECT id, map_id, label, description, x_position, y_position
+           FROM station_map_annotations
+           WHERE map_id = $1 AND deleted_at IS NULL"#,
+    )
+    .bind(map.id)
+    .fetch_all(&state.db_pool)
+    .await?;
+
+    let client = reqwest::Client::new();
+    let sign_url = format!(
+        "{}/object/sign/rusa-maps/{}",
+        state.supabase_storage_url, map.image_storage_path
+    );
+    let sign_resp = client
+        .post(&sign_url)
+        .header("Authorization", format!("Bearer {}", state.supabase_service_jwt))
+        .header("Content-Type", "application/json")
+        .body(r#"{"expiresIn":3600}"#)
+        .send()
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to generate signed URL: {}", e)))?;
+
+    let signed_url = if sign_resp.status().is_success() {
+        let body_text = sign_resp.text().await
+            .map_err(|e| AppError::Internal(format!("Failed to read signed URL: {}", e)))?;
+        let body: serde_json::Value = serde_json::from_str(&body_text)
+            .map_err(|e| AppError::Internal(format!("Failed to parse signed URL: {}", e)))?;
+        let token = body["signedURL"].as_str().unwrap_or("");
+        if token.starts_with("http") {
+            token.to_string()
+        } else {
+            format!("{}{}", state.supabase_storage_url, token)
+        }
+    } else {
+        format!("{}/object/rusa-maps/{}", state.supabase_storage_url, map.image_storage_path)
+    };
+
+    Ok(PublishedMapData {
+        signed_url,
+        image_width: map.image_width,
+        image_height: map.image_height,
+        annotations,
+        station_name: station_name.0,
+    })
+}

@@ -122,6 +122,10 @@ pub struct DailySecurityReportSummary {
 pub struct SecBroadcastRequestPayload {
     pub subject: String,
     pub content: String,
+    /// Targeting scope: "company_wide" | "sector" | "planet" | "group" | "individual"
+    pub target_scope: String,
+    /// IDs of target entities (sector, planet, group, or user IDs). Empty for company_wide.
+    pub target_ids: Vec<Uuid>,
     pub urgency: Option<String>,
     pub rationale: Option<String>,
 }
@@ -259,6 +263,7 @@ pub async fn sec_create_incident_report(
 
     // Invalidate incident archive cache so next read gets fresh data
     invalidate_cache(&state, "security_incidents").await;
+    invalidate_cache(&state, &format!("security_assigned:{}", user.id)).await;
 
     // If staff created the report, notify the Security Head
     if user.role == Role::GalacticSecurityStaff {
@@ -403,8 +408,9 @@ pub async fn sec_assign_staff_to_incident(
     )
     .await?;
 
-    // Invalidate incident archive cache
+    // Invalidate incident archive cache and assigned incidents cache
     invalidate_cache(&state, "security_incidents").await;
+    invalidate_cache(&state, &format!("security_assigned:{}", payload.user_id)).await;
 
     // Notify the assigned staff
     let _ = sqlx::query(
@@ -526,17 +532,35 @@ pub async fn sec_submit_broadcast_request(
         return Err(AppError::Internal("Invalid urgency. Must be low, normal, high, or critical.".into()));
     }
 
+    let valid_scopes = ["company_wide", "sector", "planet", "group", "individual"];
+    if !valid_scopes.contains(&payload.target_scope.as_str()) {
+        return Err(AppError::Internal(
+            "Invalid target_scope. Must be company_wide, sector, planet, group, or individual.".into(),
+        ));
+    }
+    if payload.target_scope != "company_wide" && payload.target_ids.is_empty() {
+        return Err(AppError::Internal("target_ids must not be empty for non-company_wide scopes.".into()));
+    }
+
+    let target_ids: Option<Vec<Uuid>> = if payload.target_ids.is_empty() {
+        None
+    } else {
+        Some(payload.target_ids.clone())
+    };
+
     let row: (Uuid,) = sqlx::query_as(
         r#"
         INSERT INTO broadcast_requests
-            (requester_id, type, subject, content, target_scope, urgency, rationale, status)
-        VALUES ($1, 'security', $2, $3, 'company_wide', $4, $5, 'pending')
+            (requester_id, type, subject, content, target_scope, target_ids, urgency, rationale, status)
+        VALUES ($1, 'security', $2, $3, $4, $5, $6, $7, 'pending')
         RETURNING id
         "#,
     )
     .bind(user.id)
     .bind(&payload.subject)
     .bind(&payload.content)
+    .bind(&payload.target_scope)
+    .bind(target_ids.as_deref())
     .bind(urgency)
     .bind(&payload.rationale)
     .fetch_one(&state.db_pool)
@@ -875,6 +899,61 @@ pub async fn sec_get_my_daily_reports(
     if let Ok(json) = serde_json::to_string(&rows) {
         if let Ok(mut conn) = state.redis_client.get_multiplexed_async_connection().await {
             let _: Result<(), _> = conn.set_ex(&cache_key, &json, SECURITY_DAILY_TTL).await;
+        }
+    }
+
+    Ok(rows)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// UC-SS-03: View My Assigned Incidents
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Returns incident reports assigned to the current user.
+/// Cached in Redis for 10 minutes per user; invalidated on new assignment.
+///
+/// **Access:** GalacticSecurityHead, GalacticSecurityStaff
+#[tauri::command]
+pub async fn sec_get_my_assigned_incidents(
+    state: State<'_, AppState>,
+) -> Result<Vec<IncidentReportSummary>, AppError> {
+    let user = crate::require_auth_any!(state, [
+        Role::GalacticSecurityHead, Role::GalacticSecurityStaff
+    ]);
+
+    let cache_key = format!("security_assigned:{}", user.id);
+
+    if let Ok(mut conn) = state.redis_client.get_multiplexed_async_connection().await {
+        if let Ok(cached) = conn.get::<_, String>(&cache_key).await {
+            if let Ok(parsed) = serde_json::from_str::<Vec<IncidentReportSummary>>(&cached) {
+                return Ok(parsed);
+            }
+        }
+    }
+
+    let rows = sqlx::query_as::<_, IncidentReportSummary>(
+        r#"
+        SELECT ir.id, ir.reported_by, u.full_name AS reporter_name,
+               ir.source, ir.incident_type, ir.location, ir.occurred_at,
+               ir.description, ir.severity, ir.recommended_action,
+               ir.sector_or_base, ir.assigned_to,
+               au.full_name AS assigned_to_name,
+               ir.related_incident_ids, ir.incident_meta, ir.created_at
+        FROM incident_reports ir
+        JOIN users u ON u.id = ir.reported_by
+        LEFT JOIN users au ON au.id = ir.assigned_to
+        WHERE ir.deleted_at IS NULL
+          AND ir.assigned_to = $1
+        ORDER BY ir.created_at DESC
+        "#,
+    )
+    .bind(user.id)
+    .fetch_all(&state.db_pool)
+    .await?;
+
+    if let Ok(json) = serde_json::to_string(&rows) {
+        if let Ok(mut conn) = state.redis_client.get_multiplexed_async_connection().await {
+            let _: Result<(), _> = conn.set_ex(&cache_key, &json, SECURITY_INCIDENTS_TTL).await;
         }
     }
 

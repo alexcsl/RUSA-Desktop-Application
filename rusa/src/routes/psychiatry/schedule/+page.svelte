@@ -8,10 +8,13 @@
     psyGetSchedule,
     psyManageSchedule,
     psyDeleteScheduleSlot,
+    psyGetPsychiatristUpcoming,
     type ScheduleSlot,
+    type PsychiatristAppointmentView,
   } from '$lib/stores/psychiatry';
 
   let slots: ScheduleSlot[] = $state([]);
+  let upcoming: PsychiatristAppointmentView[] = $state([]);
   let loading = $state(true);
   let error = $state('');
   let success = $state('');
@@ -24,7 +27,11 @@
   let blockedReason = $state('');
   let saving = $state(false);
 
-  onMount(async () => { await loadSlots(); });
+  onMount(async () => {
+    await loadSlots();
+    try { upcoming = await psyGetPsychiatristUpcoming(); }
+    catch { /* non-fatal */ }
+  });
 
   async function loadSlots() {
     loading = true;
@@ -130,6 +137,28 @@
       </tbody>
     </table>
   {/if}
+
+  <h3 style="margin-top:1.5rem">Booked Appointments</h3>
+  {#if upcoming.length === 0}
+    <p class="muted">No upcoming appointments.</p>
+  {:else}
+    <table class="tbl">
+      <thead>
+        <tr><th>Patient</th><th>Date / Time</th><th>Status</th></tr>
+      </thead>
+      <tbody>
+        {#each upcoming as a}
+          <tr>
+            <td>{a.patient_name}</td>
+            <td>{new Date(a.scheduled_at).toLocaleString()}</td>
+            <td>
+              <span class="badge {a.status === 'scheduled' ? 'badge-avail' : a.status === 'cancelled' ? 'badge-cancelled' : 'badge-blocked'}">{a.status}</span>
+            </td>
+          </tr>
+        {/each}
+      </tbody>
+    </table>
+  {/if}
 </div>
 
 <style>
@@ -148,6 +177,7 @@
   .badge { padding:0.15rem 0.5rem;border-radius:4px;font-size:0.7rem;font-weight:600; }
   .badge-avail { background:rgba(16,185,129,0.15);color:#34D399; }
   .badge-blocked { background:rgba(245,158,11,0.15);color:#FBBF24; }
+  .badge-cancelled { background:rgba(239,68,68,0.15);color:#EF4444; }
   .btn-accent-sm { background:rgba(58,190,255,0.1);color:#3ABEFF;border:1px solid rgba(58,190,255,0.3);border-radius:4px;padding:0.25rem 0.6rem;cursor:pointer;font-size:0.7rem; }
   .btn-accent-sm:hover { background:rgba(58,190,255,0.2); }
   .btn-danger-sm { background:rgba(239,68,68,0.1);color:#EF4444;border:1px solid rgba(239,68,68,0.3);border-radius:4px;padding:0.25rem 0.5rem;cursor:pointer;font-size:0.7rem; }

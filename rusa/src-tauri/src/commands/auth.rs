@@ -2,6 +2,7 @@
 // Source of truth: AUTH_GUIDE.md §4.4, §4.5
 
 use bcrypt::verify;
+use chrono::{DateTime, Utc};
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
@@ -201,6 +202,46 @@ pub async fn get_current_session(
         base_location_id: u.base_location_id,
         base_has_data_regulation: u.base_has_data_regulation,
     }))
+}
+
+// ── My Profile ───────────────────────────────────────────────────────────────
+
+#[derive(Debug, Serialize, FromRow)]
+pub struct MyProfileData {
+    pub id: Uuid,
+    pub full_name: String,
+    pub email: Option<String>,
+    pub username: String,
+    pub role_name: String,
+    pub base_location: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub is_active: bool,
+}
+
+/// Return the current authenticated user's own profile data.
+/// Accessible by any authenticated user regardless of role.
+#[tauri::command]
+pub async fn get_my_profile(state: State<'_, AppState>) -> Result<MyProfileData, AppError> {
+    let user_id = {
+        let guard = state.current_user.lock().await;
+        guard.as_ref().ok_or(AppError::Unauthenticated)?.id
+    };
+
+    let row = sqlx::query_as::<_, MyProfileData>(
+        r#"
+        SELECT u.id, u.full_name, u.email, u.username, r.name AS role_name,
+               bl.name AS base_location, u.created_at, u.is_active
+        FROM users u
+        JOIN roles r ON r.id = u.role_id
+        LEFT JOIN base_locations bl ON bl.id = u.base_location_id
+        WHERE u.id = $1 AND u.deleted_at IS NULL
+        "#,
+    )
+    .bind(user_id)
+    .fetch_one(&state.db_pool)
+    .await?;
+
+    Ok(row)
 }
 
 // ── Password Hashing Utility ──────────────────────────────────────────────────

@@ -2236,3 +2236,300 @@ pub async fn stl_log_farm_health(
 
     Ok(row.0)
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Commander: View All Progress Reports
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Serialize, Deserialize, FromRow)]
+pub struct ProgressReportRow {
+    pub id: Uuid,
+    pub task_id: Uuid,
+    pub task_title: String,
+    pub submitted_by_name: String,
+    pub week: Option<String>,
+    pub rag_status: Option<String>,
+    pub progress_made: String,
+    pub materials_equipment: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Commander views all progress reports from their settlement's settlers.
+/// Access: SettlerCommander or Administrator.
+#[tauri::command]
+pub async fn stl_get_progress_reports(
+    state: State<'_, AppState>,
+) -> Result<Vec<ProgressReportRow>, AppError> {
+    let user = crate::require_auth!(state, Role::SettlerCommander);
+    let settlement_id = get_user_settlement(&state.db_pool, user.id).await?;
+
+    let rows = sqlx::query_as::<_, ProgressReportRow>(
+        r#"
+        SELECT spr.id, spr.task_id, st.title AS task_title,
+               u.full_name AS submitted_by_name,
+               spr.week, spr.rag_status, spr.progress_made,
+               spr.materials_equipment, spr.created_at
+        FROM settler_progress_reports spr
+        JOIN settler_tasks st ON st.id = spr.task_id
+        JOIN users u ON u.id = spr.submitted_by
+        WHERE spr.settlement_id = $1
+        ORDER BY spr.created_at DESC
+        "#,
+    )
+    .bind(settlement_id)
+    .fetch_all(&state.db_pool)
+    .await?;
+
+    Ok(rows)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Commander + Civil Engineer: View Building Health Logs
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Serialize, Deserialize, FromRow)]
+pub struct BuildingLogRow {
+    pub id: Uuid,
+    pub building_name: String,
+    pub submitted_by_name: String,
+    pub check_date: NaiveDate,
+    pub findings: Option<String>,
+    pub status: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Commander + Civil Engineer views building health logs for their settlement.
+/// Access: SettlerCommander or CivilEngineer (or Administrator).
+#[tauri::command]
+pub async fn stl_get_building_logs(
+    state: State<'_, AppState>,
+) -> Result<Vec<BuildingLogRow>, AppError> {
+    let user = crate::require_auth_any!(state, [Role::SettlerCommander, Role::CivilEngineer]);
+    let settlement_id = get_user_settlement(&state.db_pool, user.id).await?;
+
+    let rows = sqlx::query_as::<_, BuildingLogRow>(
+        r#"
+        SELECT bh.id, bh.building_name, u.full_name AS submitted_by_name,
+               bh.check_date, bh.findings, bh.status, bh.created_at
+        FROM building_health_logs bh
+        JOIN users u ON u.id = bh.checked_by
+        WHERE bh.settlement_id = $1
+        ORDER BY bh.check_date DESC, bh.created_at DESC
+        "#,
+    )
+    .bind(settlement_id)
+    .fetch_all(&state.db_pool)
+    .await?;
+
+    Ok(rows)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Commander + Farmer: View Farm Health Logs
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Serialize, Deserialize, FromRow)]
+pub struct FarmHealthRow {
+    pub id: Uuid,
+    pub subject_type: String,
+    pub subject_name: String,
+    pub submitted_by_name: String,
+    pub log_date: NaiveDate,
+    pub condition: String,
+    pub treatment: Option<String>,
+    pub notes: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Commander + Farmer views farm health logs for their settlement.
+/// Access: SettlerCommander or Farmer (or Administrator).
+#[tauri::command]
+pub async fn stl_get_farm_health_logs(
+    state: State<'_, AppState>,
+) -> Result<Vec<FarmHealthRow>, AppError> {
+    let user = crate::require_auth_any!(state, [Role::SettlerCommander, Role::Farmer]);
+    let settlement_id = get_user_settlement(&state.db_pool, user.id).await?;
+
+    let rows = sqlx::query_as::<_, FarmHealthRow>(
+        r#"
+        SELECT fh.id, fh.subject_type, fh.subject_name, u.full_name AS submitted_by_name,
+               fh.log_date, fh.condition, fh.treatment, fh.notes, fh.created_at
+        FROM farm_health_logs fh
+        JOIN users u ON u.id = fh.logged_by
+        WHERE fh.settlement_id = $1
+        ORDER BY fh.log_date DESC, fh.created_at DESC
+        "#,
+    )
+    .bind(settlement_id)
+    .fetch_all(&state.db_pool)
+    .await?;
+
+    Ok(rows)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Submit Security Incident Report (SettlerCommander, CivilEngineer, Farmer)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[derive(Debug, Deserialize)]
+pub struct SettlerSecurityReportPayload {
+    pub incident_type: String,
+    pub location: String,
+    pub description: String,
+    pub severity: String,
+    pub occurred_at: Option<String>,
+    pub recommended_action: Option<String>,
+}
+
+/// Submit a security incident report (Settler Commander, Civil Engineer, or Farmer).
+/// Access: SettlerCommander, CivilEngineer, or Farmer.
+#[tauri::command]
+pub async fn stl_submit_security_report(
+    state: State<'_, AppState>,
+    payload: SettlerSecurityReportPayload,
+) -> Result<Uuid, AppError> {
+    let user = crate::require_auth_any!(state, [
+        Role::SettlerCommander, Role::CivilEngineer, Role::Farmer
+    ]);
+
+    if payload.incident_type.trim().is_empty() {
+        return Err(AppError::Internal("Incident type is required.".into()));
+    }
+    if payload.description.trim().is_empty() {
+        return Err(AppError::Internal("Description is required.".into()));
+    }
+
+    let occurred_at: Option<DateTime<Utc>> = if let Some(ref oa) = payload.occurred_at {
+        if oa.is_empty() {
+            None
+        } else if let Ok(dt) = oa.parse::<DateTime<Utc>>() {
+            Some(dt)
+        } else if let Ok(nd) = chrono::NaiveDate::parse_from_str(oa, "%Y-%m-%d") {
+            Some(nd.and_hms_opt(0, 0, 0).unwrap().and_utc())
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let row: (Uuid,) = sqlx::query_as(
+        r#"
+        INSERT INTO incident_reports
+            (reported_by, source, incident_type, location, description,
+             severity, occurred_at, recommended_action)
+        VALUES ($1, 'external_report', $2, $3, $4, $5, $6, $7)
+        RETURNING id
+        "#,
+    )
+    .bind(user.id)
+    .bind(&payload.incident_type)
+    .bind(&payload.location)
+    .bind(&payload.description)
+    .bind(&payload.severity)
+    .bind(occurred_at)
+    .bind(&payload.recommended_action)
+    .fetch_one(&state.db_pool)
+    .await?;
+
+    write_audit_log(
+        &state.db_pool,
+        "incident_reports",
+        row.0,
+        AuditOperation::Create,
+        user.id,
+        None,
+        Some(serde_json::json!({
+            "incident_type": payload.incident_type,
+            "severity": payload.severity,
+            "source": "settler",
+        })),
+    )
+    .await?;
+
+    // Notify GalacticSecurityHead
+    let _ = sqlx::query(
+        r#"INSERT INTO notifications (user_id, type, payload)
+           SELECT u.id, 'report:received', $1::jsonb
+           FROM users u
+           JOIN roles r ON r.id = u.role_id
+           WHERE r.name = 'GalacticSecurityHead'
+             AND u.deleted_at IS NULL AND u.is_active = true"#,
+    )
+    .bind(serde_json::json!({
+        "report_id": row.0,
+        "from": user.full_name,
+        "incident_type": payload.incident_type,
+        "severity": payload.severity,
+    }))
+    .execute(&state.db_pool)
+    .await;
+
+    Ok(row.0)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Dropdown helpers — list anomalies and complaints for form selects
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Summary row used to populate the abandonment dropdown.
+#[derive(Debug, Serialize, FromRow)]
+pub struct AnomalyReportSummary {
+    pub id: Uuid,
+    pub description: String,
+    pub category: Option<String>,
+    pub danger_level: Option<String>,
+    pub status: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Commander: list anomaly reports in their settlement (for dropdown).
+#[tauri::command]
+pub async fn stl_list_settlement_anomalies(
+    state: State<'_, AppState>,
+) -> Result<Vec<AnomalyReportSummary>, AppError> {
+    let _user = crate::require_auth!(state, Role::SettlerCommander);
+    let rows = sqlx::query_as::<_, AnomalyReportSummary>(
+        r#"SELECT ar.id, ar.description,
+                  ar.category::text AS category,
+                  ar.danger_level, ar.status, ar.created_at
+           FROM anomaly_reports ar
+           WHERE ar.deleted_at IS NULL
+           ORDER BY ar.created_at DESC
+           LIMIT 200"#,
+    )
+    .fetch_all(&state.db_pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Summary row used to populate the repatriation dropdown.
+#[derive(Debug, Serialize, FromRow)]
+pub struct ComplaintSummary {
+    pub id: Uuid,
+    pub incident_description: String,
+    pub subject_name: String,
+    pub status: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Commander: list settler complaints (for dropdown).
+#[tauri::command]
+pub async fn stl_list_settlement_complaints(
+    state: State<'_, AppState>,
+) -> Result<Vec<ComplaintSummary>, AppError> {
+    let _user = crate::require_auth!(state, Role::SettlerCommander);
+    let rows = sqlx::query_as::<_, ComplaintSummary>(
+        r#"SELECT sc.id, sc.incident_description,
+                  COALESCE(u2.full_name, 'Unknown') AS subject_name,
+                  sc.status, sc.created_at
+           FROM settler_complaints sc
+           LEFT JOIN users u2 ON u2.id = sc.subject_user_id
+           WHERE sc.deleted_at IS NULL
+           ORDER BY sc.created_at DESC
+           LIMIT 200"#,
+    )
+    .fetch_all(&state.db_pool)
+    .await?;
+    Ok(rows)
+}

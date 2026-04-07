@@ -214,6 +214,11 @@ export async function sstGetPublishedMap(
   return invoke<PublishedMapData>('sst_get_published_map', { stationId });
 }
 
+/** Get signed URL + annotations for any map (published or draft). Auth required. */
+export async function sstGetMapWithUrl(mapId: string): Promise<PublishedMapData> {
+  return invoke<PublishedMapData>('sst_get_map_with_url', { mapId });
+}
+
 // ── UC-SSS-06: Log Personnel On Board ────────────────────────────────────────
 
 export async function sstLogArrival(payload: {

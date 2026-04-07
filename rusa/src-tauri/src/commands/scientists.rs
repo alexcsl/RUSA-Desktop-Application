@@ -135,7 +135,7 @@ pub struct ApprovedTest {
 pub struct ProposeNewTestPayload {
     pub name: String,
     pub goal: String,
-    pub procedure: String,
+    pub procedure: Option<String>,
     pub species_scope: Option<String>,
     pub category: Vec<String>,
     pub apparatuses: Option<String>,
@@ -250,7 +250,7 @@ pub async fn submit_help_request(
     payload: SubmitHelpRequestPayload,
 ) -> Result<Uuid, AppError> {
     let user = crate::require_auth_any!(state, [
-        Role::Physicist, Role::Chemist, Role::Biologist
+        Role::Physicist, Role::Chemist, Role::Biologist, Role::Mathematician
     ]);
 
     if payload.title.trim().is_empty() {
@@ -259,9 +259,9 @@ pub async fn submit_help_request(
 
     // Determine proxy director based on scientist role
     let proxy_role = match user.role {
-        Role::Physicist => "TheArtificer",
+        Role::Physicist | Role::Mathematician => "TheArtificer",
         Role::Chemist | Role::Biologist => "TheObserver",
-        _ => "TheObserver", // fallback (admin acting)
+        _ => "TheArtificer",
     };
 
     // Create a task of type 'help_request' assigned to proxy director
@@ -1430,4 +1430,543 @@ pub async fn get_my_test_proposals(
         .collect();
 
     Ok(result)
+}
+
+// ── New Structs ───────────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct SubmitTaskProgressPayload {
+    pub task_id: Uuid,
+    pub progress_summary: String,
+    pub rag_status: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ConcludeTaskPayload {
+    pub task_id: Uuid,
+    pub conclusion_summary: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ProposeNewMatterPayload {
+    pub title: String,
+    pub introduction: Option<String>,
+    pub problem_statement: Option<String>,
+    pub research_questions: Option<String>,
+    pub hypotheses: Option<String>,
+    pub location: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ProposeNewPhysicalObjectPayload {
+    pub title: String,
+    pub introduction: Option<String>,
+    pub problem_statement: Option<String>,
+    pub research_questions: Option<String>,
+    pub hypotheses: Option<String>,
+    pub location: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, FromRow)]
+pub struct ExperimentLogWithExp {
+    pub id: Uuid,
+    pub experiment_id: Uuid,
+    pub experiment_title: String,
+    pub experiment_type: String,
+    pub log_date: NaiveDate,
+    pub rag_status: Option<String>,
+    pub completed_actions: Option<String>,
+    pub pending_actions: Option<String>,
+    pub collected_data: Option<serde_json::Value>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SciSubmitSecurityReportPayload {
+    pub incident_type: String,
+    pub location: String,
+    pub description: String,
+    pub severity: String,
+    pub occurred_at: Option<String>,
+    pub recommended_action: Option<String>,
+}
+
+// ════════════════════════════════════════════════════════════════════════════════
+// Submit Task Progress Report
+// ════════════════════════════════════════════════════════════════════════════════
+
+/// Submit a progress update for an assigned task.
+///
+/// **Access:** Physicist, Chemist, Biologist.
+#[tauri::command]
+pub async fn submit_task_progress(
+    state: State<'_, AppState>,
+    payload: SubmitTaskProgressPayload,
+) -> Result<(), AppError> {
+    let user = crate::require_auth_any!(state, [
+        Role::Physicist, Role::Chemist, Role::Biologist
+    ]);
+
+    if payload.progress_summary.trim().is_empty() {
+        return Err(AppError::Internal("Progress summary cannot be empty.".into()));
+    }
+
+    if let Some(ref rag) = payload.rag_status {
+        if !["red", "amber", "green"].contains(&rag.as_str()) {
+            return Err(AppError::Internal("RAG status must be red, amber, or green.".into()));
+        }
+    }
+
+    // Verify task belongs to user
+    let task: Option<(Uuid, Uuid, String)> = sqlx::query_as(
+        "SELECT id, assigned_by, status FROM tasks WHERE id = $1 AND assigned_to = $2 AND deleted_at IS NULL",
+    )
+    .bind(payload.task_id)
+    .bind(user.id)
+    .fetch_optional(&state.db_pool)
+    .await?;
+
+    let (_, assigner_id, _) = task
+        .ok_or_else(|| AppError::Internal("Task not found or not assigned to you.".into()))?;
+
+    let progress_json = serde_json::json!({
+        "summary": payload.progress_summary,
+        "rag_status": payload.rag_status,
+        "updated_at": chrono::Utc::now().to_rfc3339(),
+    });
+
+    sqlx::query(
+        r#"UPDATE tasks SET status = 'in_progress',
+           payload = payload || jsonb_build_object('latest_progress', $1::jsonb),
+           updated_at = NOW()
+           WHERE id = $2"#,
+    )
+    .bind(&progress_json)
+    .bind(payload.task_id)
+    .execute(&state.db_pool)
+    .await?;
+
+    // Notify assigning director
+    let _ = sqlx::query(
+        r#"INSERT INTO notifications (user_id, type, payload) VALUES ($1, 'report:received', $2::jsonb)"#,
+    )
+    .bind(assigner_id)
+    .bind(serde_json::json!({
+        "report_type": "task_progress",
+        "task_id": payload.task_id,
+        "reported_by": user.full_name,
+        "rag_status": payload.rag_status,
+    }))
+    .execute(&state.db_pool)
+    .await;
+
+    write_audit_log(
+        &state.db_pool,
+        "tasks",
+        payload.task_id,
+        AuditOperation::Update,
+        user.id,
+        None,
+        Some(serde_json::json!({ "action": "progress_update", "rag_status": payload.rag_status })),
+    )
+    .await?;
+
+    Ok(())
+}
+
+// ════════════════════════════════════════════════════════════════════════════════
+// Conclude / Complete Task
+// ════════════════════════════════════════════════════════════════════════════════
+
+/// Mark an assigned task as completed with a conclusion note.
+///
+/// **Access:** All scientists.
+#[tauri::command]
+pub async fn conclude_task(
+    state: State<'_, AppState>,
+    payload: ConcludeTaskPayload,
+) -> Result<(), AppError> {
+    let user = crate::require_auth_any!(state, [
+        Role::Mathematician, Role::Physicist, Role::Chemist, Role::Biologist
+    ]);
+
+    if payload.conclusion_summary.trim().is_empty() {
+        return Err(AppError::Internal("Conclusion summary cannot be empty.".into()));
+    }
+
+    let task: Option<(Uuid, Uuid, String)> = sqlx::query_as(
+        "SELECT id, assigned_by, status FROM tasks WHERE id = $1 AND assigned_to = $2 AND deleted_at IS NULL",
+    )
+    .bind(payload.task_id)
+    .bind(user.id)
+    .fetch_optional(&state.db_pool)
+    .await?;
+
+    let (_, assigner_id, status) = task
+        .ok_or_else(|| AppError::Internal("Task not found or not assigned to you.".into()))?;
+
+    if status == "completed" {
+        return Err(AppError::Internal("Task is already completed.".into()));
+    }
+
+    let conclusion_json = serde_json::json!({ "conclusion": payload.conclusion_summary });
+
+    sqlx::query(
+        r#"UPDATE tasks SET status = 'completed', completed_at = NOW(),
+           payload = payload || jsonb_build_object('conclusion', $1::jsonb),
+           updated_at = NOW()
+           WHERE id = $2"#,
+    )
+    .bind(&conclusion_json)
+    .bind(payload.task_id)
+    .execute(&state.db_pool)
+    .await?;
+
+    let _ = sqlx::query(
+        r#"INSERT INTO notifications (user_id, type, payload) VALUES ($1, 'task:concluded', $2::jsonb)"#,
+    )
+    .bind(assigner_id)
+    .bind(serde_json::json!({
+        "task_id": payload.task_id,
+        "concluded_by": user.full_name,
+    }))
+    .execute(&state.db_pool)
+    .await;
+
+    write_audit_log(
+        &state.db_pool,
+        "tasks",
+        payload.task_id,
+        AuditOperation::Update,
+        user.id,
+        None,
+        Some(serde_json::json!({ "action": "conclude_task" })),
+    )
+    .await?;
+
+    Ok(())
+}
+
+// ════════════════════════════════════════════════════════════════════════════════
+// Propose New Matter (Chemist — UC-4-06 for chemistry)
+// ════════════════════════════════════════════════════════════════════════════════
+
+/// Propose a new matter/material for the chemistry archive.
+/// Creates a chemical experiment proposal; routes to The Observer.
+///
+/// **Access:** Chemist only.
+#[tauri::command]
+pub async fn propose_new_matter(
+    state: State<'_, AppState>,
+    payload: ProposeNewMatterPayload,
+) -> Result<Uuid, AppError> {
+    let user = crate::require_auth!(state, Role::Chemist);
+
+    if payload.title.trim().is_empty() {
+        return Err(AppError::Internal("Matter proposal title cannot be empty.".into()));
+    }
+
+    let metadata = serde_json::json!({
+        "introduction": payload.introduction,
+        "problem_statement": payload.problem_statement,
+        "research_questions": payload.research_questions,
+        "hypotheses": payload.hypotheses,
+        "location": payload.location,
+        "matter_proposal": true,
+    });
+
+    let exp_id: (Uuid,) = sqlx::query_as(
+        r#"INSERT INTO experiments (title, type, metadata, proposed_by)
+           VALUES ($1, 'chemical', $2, $3) RETURNING id"#,
+    )
+    .bind(&payload.title)
+    .bind(&metadata)
+    .bind(user.id)
+    .fetch_one(&state.db_pool)
+    .await?;
+
+    let req_id: (Uuid,) = sqlx::query_as(
+        r#"INSERT INTO requests (type, requester_id, title, description, payload, bypass_authority)
+           VALUES ('experiment_proposal', $1, $2, $3, $4, 'TheObserver') RETURNING id"#,
+    )
+    .bind(user.id)
+    .bind(&payload.title)
+    .bind(payload.introduction.as_deref())
+    .bind(serde_json::json!({
+        "experiment_id": exp_id.0,
+        "experiment_type": "chemical",
+        "matter_proposal": true,
+    }))
+    .fetch_one(&state.db_pool)
+    .await?;
+
+    let observer_ids: Vec<(Uuid,)> = sqlx::query_as(
+        "SELECT u.id FROM users u JOIN roles r ON r.id = u.role_id WHERE r.name = 'TheObserver' AND u.deleted_at IS NULL",
+    )
+    .fetch_all(&state.db_pool)
+    .await?;
+
+    for (obs_id,) in &observer_ids {
+        let _ = sqlx::query(
+            r#"INSERT INTO notifications (user_id, type, payload) VALUES ($1, 'experiment:proposed', $2::jsonb)"#,
+        )
+        .bind(obs_id)
+        .bind(serde_json::json!({
+            "request_id": req_id.0,
+            "experiment_id": exp_id.0,
+            "title": payload.title,
+            "proposed_by": user.full_name,
+            "matter_proposal": true,
+        }))
+        .execute(&state.db_pool)
+        .await;
+    }
+
+    write_audit_log(
+        &state.db_pool,
+        "experiments",
+        exp_id.0,
+        AuditOperation::Create,
+        user.id,
+        None,
+        Some(serde_json::json!({ "title": payload.title, "type": "chemical", "matter_proposal": true })),
+    )
+    .await?;
+
+    Ok(exp_id.0)
+}
+
+// ════════════════════════════════════════════════════════════════════════════════
+// Propose New Physical Object / Phenomenon (Physicist — UC-4-06 for physics)
+// ════════════════════════════════════════════════════════════════════════════════
+
+/// Propose a new physical object or phenomenon for the physics archive.
+/// Creates a physical experiment proposal; routes to The Artificer.
+///
+/// **Access:** Physicist only.
+#[tauri::command]
+pub async fn propose_new_physical_object(
+    state: State<'_, AppState>,
+    payload: ProposeNewPhysicalObjectPayload,
+) -> Result<Uuid, AppError> {
+    let user = crate::require_auth!(state, Role::Physicist);
+
+    if payload.title.trim().is_empty() {
+        return Err(AppError::Internal("Object/phenomenon proposal title cannot be empty.".into()));
+    }
+
+    let metadata = serde_json::json!({
+        "introduction": payload.introduction,
+        "problem_statement": payload.problem_statement,
+        "research_questions": payload.research_questions,
+        "hypotheses": payload.hypotheses,
+        "location": payload.location,
+        "object_proposal": true,
+    });
+
+    let exp_id: (Uuid,) = sqlx::query_as(
+        r#"INSERT INTO experiments (title, type, metadata, proposed_by)
+           VALUES ($1, 'physical', $2, $3) RETURNING id"#,
+    )
+    .bind(&payload.title)
+    .bind(&metadata)
+    .bind(user.id)
+    .fetch_one(&state.db_pool)
+    .await?;
+
+    let req_id: (Uuid,) = sqlx::query_as(
+        r#"INSERT INTO requests (type, requester_id, title, description, payload, bypass_authority)
+           VALUES ('experiment_proposal', $1, $2, $3, $4, 'TheArtificer') RETURNING id"#,
+    )
+    .bind(user.id)
+    .bind(&payload.title)
+    .bind(payload.introduction.as_deref())
+    .bind(serde_json::json!({
+        "experiment_id": exp_id.0,
+        "experiment_type": "physical",
+        "object_proposal": true,
+    }))
+    .fetch_one(&state.db_pool)
+    .await?;
+
+    let artificer_ids: Vec<(Uuid,)> = sqlx::query_as(
+        "SELECT u.id FROM users u JOIN roles r ON r.id = u.role_id WHERE r.name = 'TheArtificer' AND u.deleted_at IS NULL",
+    )
+    .fetch_all(&state.db_pool)
+    .await?;
+
+    for (art_id,) in &artificer_ids {
+        let _ = sqlx::query(
+            r#"INSERT INTO notifications (user_id, type, payload) VALUES ($1, 'experiment:proposed', $2::jsonb)"#,
+        )
+        .bind(art_id)
+        .bind(serde_json::json!({
+            "request_id": req_id.0,
+            "experiment_id": exp_id.0,
+            "title": payload.title,
+            "proposed_by": user.full_name,
+            "object_proposal": true,
+        }))
+        .execute(&state.db_pool)
+        .await;
+    }
+
+    write_audit_log(
+        &state.db_pool,
+        "experiments",
+        exp_id.0,
+        AuditOperation::Create,
+        user.id,
+        None,
+        Some(serde_json::json!({ "title": payload.title, "type": "physical", "object_proposal": true })),
+    )
+    .await?;
+
+    Ok(exp_id.0)
+}
+
+// ════════════════════════════════════════════════════════════════════════════════
+// Get My Experiment Logs
+// ════════════════════════════════════════════════════════════════════════════════
+
+/// Returns all experiment daily logs for experiments matching the user's role type.
+/// Cached in Redis for 5 minutes per user.
+///
+/// **Access:** Physicist, Chemist, Biologist.
+#[tauri::command]
+pub async fn get_my_experiment_logs(
+    state: State<'_, AppState>,
+) -> Result<Vec<ExperimentLogWithExp>, AppError> {
+    let user = crate::require_auth_any!(state, [
+        Role::Physicist, Role::Chemist, Role::Biologist
+    ]);
+
+    let exp_type = match user.role {
+        Role::Physicist => "physical",
+        Role::Chemist => "chemical",
+        Role::Biologist => "biology_observation",
+        _ => "physical",
+    };
+
+    let cache_key = format!("sci_exp_logs:{}:{}", exp_type, user.id);
+
+    if let Ok(mut conn) = state.redis_client.get_multiplexed_async_connection().await {
+        if let Ok(cached) = conn.get::<_, String>(&cache_key).await {
+            if let Ok(parsed) = serde_json::from_str::<Vec<ExperimentLogWithExp>>(&cached) {
+                return Ok(parsed);
+            }
+        }
+    }
+
+    let rows = sqlx::query_as::<_, ExperimentLogWithExp>(
+        r#"
+        SELECT edl.id, edl.experiment_id, e.title AS experiment_title, e.type AS experiment_type,
+               edl.log_date, edl.rag_status, edl.completed_actions, edl.pending_actions,
+               edl.collected_data, edl.created_at
+        FROM experiment_daily_logs edl
+        JOIN experiments e ON e.id = edl.experiment_id
+        WHERE e.type = $1
+          AND edl.deleted_at IS NULL
+          AND e.deleted_at IS NULL
+        ORDER BY edl.log_date DESC, edl.created_at DESC
+        LIMIT 200
+        "#,
+    )
+    .bind(exp_type)
+    .fetch_all(&state.db_pool)
+    .await?;
+
+    if let Ok(json) = serde_json::to_string(&rows) {
+        if let Ok(mut conn) = state.redis_client.get_multiplexed_async_connection().await {
+            let _: Result<(), _> = conn.set_ex(&cache_key, &json, 300).await;
+        }
+    }
+
+    Ok(rows)
+}
+
+// ════════════════════════════════════════════════════════════════════════════════
+// Submit Security Report
+// ════════════════════════════════════════════════════════════════════════════════
+
+/// Submit a security incident report from the science division.
+///
+/// **Access:** All scientists.
+#[tauri::command]
+pub async fn sci_submit_security_report(
+    state: State<'_, AppState>,
+    payload: SciSubmitSecurityReportPayload,
+) -> Result<Uuid, AppError> {
+    let user = crate::require_auth_any!(state, [
+        Role::Mathematician, Role::Physicist, Role::Chemist, Role::Biologist
+    ]);
+
+    if payload.description.trim().is_empty() {
+        return Err(AppError::Internal("Incident description cannot be empty.".into()));
+    }
+
+    if !["low", "medium", "high", "critical"].contains(&payload.severity.as_str()) {
+        return Err(AppError::Internal("Severity must be low, medium, high, or critical.".into()));
+    }
+
+    let occurred_at: Option<chrono::DateTime<chrono::Utc>> = match &payload.occurred_at {
+        Some(s) if !s.is_empty() => Some(
+            s.parse::<chrono::DateTime<chrono::Utc>>()
+                .map_err(|_| AppError::Internal("Invalid occurred_at format.".into()))?,
+        ),
+        _ => None,
+    };
+
+    let row: (Uuid,) = sqlx::query_as(
+        r#"INSERT INTO incident_reports
+           (reported_by, source, incident_type, location, occurred_at,
+            description, severity, recommended_action, sector_or_base)
+           VALUES ($1, 'external_report', $2, $3, $4, $5, $6, $7, 'Science Division')
+           RETURNING id"#,
+    )
+    .bind(user.id)
+    .bind(&payload.incident_type)
+    .bind(&payload.location)
+    .bind(occurred_at)
+    .bind(&payload.description)
+    .bind(&payload.severity)
+    .bind(&payload.recommended_action)
+    .fetch_one(&state.db_pool)
+    .await?;
+
+    // Notify GalacticSecurityHead
+    let heads: Vec<(Uuid,)> = sqlx::query_as(
+        "SELECT u.id FROM users u JOIN roles r ON r.id = u.role_id WHERE r.name = 'GalacticSecurityHead' AND u.is_active = true AND u.deleted_at IS NULL",
+    )
+    .fetch_all(&state.db_pool)
+    .await?;
+
+    for (hid,) in heads {
+        let _ = sqlx::query(
+            r#"INSERT INTO notifications (user_id, type, payload) VALUES ($1, 'report:received', $2::jsonb)"#,
+        )
+        .bind(hid)
+        .bind(serde_json::json!({
+            "report_type": "security_report",
+            "incident_id": row.0,
+            "severity": payload.severity,
+            "submitted_by": user.full_name,
+            "division": "science",
+        }))
+        .execute(&state.db_pool)
+        .await;
+    }
+
+    write_audit_log(
+        &state.db_pool,
+        "incident_reports",
+        row.0,
+        AuditOperation::Create,
+        user.id,
+        None,
+        Some(serde_json::json!({ "incident_type": payload.incident_type, "severity": payload.severity })),
+    )
+    .await?;
+
+    Ok(row.0)
 }

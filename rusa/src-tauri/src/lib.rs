@@ -15,14 +15,18 @@ use commands::administrator::{
     admin_get_roles, admin_get_base_locations,
 };
 use commands::astronauts::{
-    ast_assign_mission, ast_get_all_missions, ast_get_all_status_reports,
-    ast_get_colleague_counters, ast_get_completion_requests_taskmaster,
-    ast_get_completion_requests_wanderer, ast_get_evidence_urls,
-    ast_get_mission_detail, ast_get_my_missions, ast_get_personal_journal,
-    ast_process_completion_request, ast_submit_completion_request,
+    ast_assign_mission, ast_get_all_astronaut_counters, ast_get_all_missions,
+    ast_get_all_status_reports, ast_get_colleague_counters,
+    ast_get_completion_requests_taskmaster, ast_get_completion_requests_wanderer,
+    ast_get_evidence_urls, ast_get_mission_detail, ast_get_my_missions,
+    ast_get_personal_journal, ast_process_completion_request,
+    ast_submit_completion_request, ast_submit_security_report,
     ast_submit_status_report, ast_taskmaster_decide_completion,
 };
-use commands::auth::{get_current_session, login, logout};
+use commands::auth::{get_current_session, get_my_profile, login, logout};
+use commands::da_operations::{
+    da_browse_data, da_compute_operation, da_submit_security_report, da_write_data,
+};
 use commands::data_analysts::{
     get_analyst_inbox, get_data_request_detail, get_data_response, get_my_data_requests,
     process_data_request, submit_data_request, submit_data_response,
@@ -45,13 +49,27 @@ use commands::directors::{
     send_security_message, submit_broadcast_request, terminate_personnel,
     terminate_personnel_account, update_personnel_account, upload_event_document,
     dir_get_daily_security_reports,
+    dir_submit_security_report, dir_get_my_security_reports,
+    dir_get_file_signed_url, dir_get_role_list, dir_get_task_progress_reports,
+    dir_nomad_get_progress_reports, dir_nomad_get_building_logs, dir_nomad_get_farm_logs,
+    dir_nomad_get_anomaly_reports, dir_nomad_get_settler_reports,
+    dir_nomad_get_settlement_inventory, dir_nomad_get_supply_requests,
+    dir_nomad_reposition_personnel,
+    lib_restrict_document_access, lib_redact_document_field,
+    lib_get_restriction_list, lib_remove_restriction,
+    lib_soft_delete_record,
+    get_personnel_activity_log,
+    dir_guardian_get_incident_reports, dir_guardian_get_lost_found_logs,
+    dir_get_approved_tests, dir_get_science_archive,
+    dir_get_experiment_logs, dir_get_closure_requests_for_director,
+    dir_get_experiments,
 };
 use commands::engineers::{
     eng_get_approved_tests, eng_get_experiment_archive, eng_get_experiment_detail,
     eng_get_my_help_requests, eng_get_my_tasks, eng_get_my_test_proposals,
     eng_get_progress_reports, eng_get_species_archive, eng_log_daily_experiment,
     eng_propose_new_test, eng_submit_experiment_conclusion, eng_submit_help_request,
-    eng_submit_progress_report,
+    eng_submit_progress_report, eng_submit_security_report,
 };
 use commands::medical::{
     med_add_inventory, med_allocate_shift, med_delete_shift,
@@ -60,7 +78,7 @@ use commands::medical::{
     med_get_patients, med_get_staff_list, med_get_user_lookup,
     med_log_treatment, med_register_patient, med_remove_inventory,
     med_submit_budget_request, med_submit_expenditure_report,
-    med_update_inventory,
+    med_submit_security_report, med_update_inventory,
 };
 use commands::sanitary::{
     san_add_inventory, san_allocate_shift, san_assign_recruit, san_assign_task,
@@ -72,8 +90,8 @@ use commands::sanitary::{
     san_get_staff_roster, san_get_transfer_requests, san_get_wastewater_docs,
     san_log_inventory_action, san_remove_inventory, san_review_transfer_request,
     san_set_division_quota, san_submit_budget_request, san_submit_expenditure_report,
-    san_submit_inspection_report, san_submit_transfer_request, san_update_disposal_doc,
-    san_update_inventory, san_update_task_status, san_update_wastewater_doc,
+    san_submit_inspection_report, san_submit_security_report, san_submit_transfer_request,
+    san_update_disposal_doc, san_update_inventory, san_update_task_status, san_update_wastewater_doc,
 };
 use commands::messaging::{
     add_group_member, create_messaging_group, delete_message, delete_messaging_group,
@@ -84,33 +102,38 @@ use commands::messaging::{
 use commands::scientists::{
     get_approved_tests, get_archive, get_experiment_archive, get_experiment_detail,
     get_final_documents, get_math_results, get_my_tasks, get_my_test_proposals,
-    log_experiment_session, propose_experiment, propose_new_species, propose_new_test,
-    submit_experiment_conclusion, submit_final_document, submit_help_request,
-    submit_math_results,
+    get_my_experiment_logs, log_experiment_session, propose_experiment, propose_new_matter,
+    propose_new_physical_object, propose_new_species, propose_new_test,
+    sci_submit_security_report, submit_experiment_conclusion, submit_final_document,
+    submit_help_request, submit_math_results, submit_task_progress, conclude_task,
 };
 use commands::security::{
     sec_assign_staff_to_incident, sec_create_incident_report, sec_get_incident_archive,
-    sec_get_my_broadcast_requests, sec_get_my_daily_reports, sec_get_security_messages,
+    sec_get_my_broadcast_requests, sec_get_my_daily_reports, sec_get_my_assigned_incidents,
+    sec_get_security_messages,
     sec_get_security_personnel, sec_send_security_message, sec_submit_broadcast_request,
     sec_submit_daily_report,
 };
 use commands::space_station::{
     sst_add_annotation, sst_add_to_archive, sst_delete_annotation, sst_get_annotations,
     sst_get_archive, sst_get_inventory, sst_get_maps, sst_get_personnel,
-    sst_get_public_stations, sst_get_published_map, sst_get_stations,
+    sst_get_public_stations, sst_get_published_map, sst_get_stations, sst_get_map_with_url,
     sst_get_supply_requests, sst_log_arrival, sst_log_departure, sst_manage_inventory,
     sst_propose_abandonment, sst_publish_map, sst_report_finding_to_security,
     sst_submit_supply_request, sst_upload_map,
 };
 use commands::settlers::{
-    stl_assign_task, stl_forward_to_directors, stl_get_dashboard, stl_get_incoming_queue,
-    stl_get_my_tasks, stl_get_residence, stl_get_settlement_inventory, stl_get_settlement_members,
+    stl_assign_task, stl_forward_to_directors, stl_get_building_logs, stl_get_dashboard,
+    stl_get_farm_health_logs, stl_get_incoming_queue,
+    stl_get_my_tasks, stl_get_progress_reports, stl_get_residence,
+    stl_get_settlement_inventory, stl_get_settlement_members,
     stl_get_task_detail,
     stl_log_building_health, stl_log_farm_health, stl_manage_inventory, stl_reject_incoming,
     stl_request_abandonment, stl_request_farming_supplies, stl_request_materials,
     stl_request_repatriation, stl_set_house_arrest, stl_submit_anomaly_report,
     stl_submit_commander_anomaly, stl_submit_commander_supply, stl_submit_complaint,
-    stl_submit_construction_report, stl_submit_progress_report, stl_submit_supply_request,
+    stl_submit_construction_report, stl_submit_progress_report, stl_submit_security_report,
+    stl_submit_supply_request, stl_list_settlement_anomalies, stl_list_settlement_complaints,
 };
 use commands::psychiatry::{
     psy_create_patient_record, psy_get_user_directory, psy_get_my_patients,
@@ -121,6 +144,11 @@ use commands::psychiatry::{
     psy_assistant_get_patients, psy_assistant_get_recovery_log,
     psy_assistant_get_schedule, psy_assistant_get_appointments,
     psy_grant_schedule_access, psy_get_access_settings,
+    psy_get_assigned_psychiatrists, psy_submit_security_report,
+    psy_get_my_assistant, psy_assign_assistant, psy_remove_assistant,
+    psy_get_assistant_candidates,
+    psy_patient_get_my_appointments, psy_get_psychiatrist_upcoming,
+    psy_assistant_get_granted_appointments,
 };
 use commands::voting::{
     admin_override_vote, admin_terminate_vote, cast_vote, change_vote,
@@ -245,6 +273,7 @@ pub fn run() {
             login,
             logout,
             get_current_session,
+            get_my_profile,
             // Account management
             create_personnel_account,
             terminate_personnel_account,
@@ -296,7 +325,7 @@ pub fn run() {
             decide_data_request,
             get_outbound_review_queue,
             review_outbound_data_response,
-            // Data Analysts (UC-DRQ-01, UC-DA-01/02/03)
+            // Data Analysts (UC-DRQ-01, UC-DA-01..06)
             submit_data_request,
             get_my_data_requests,
             get_data_request_detail,
@@ -304,6 +333,10 @@ pub fn run() {
             process_data_request,
             submit_data_response,
             get_data_response,
+            da_browse_data,
+            da_compute_operation,
+            da_submit_security_report,
+            da_write_data,
             // Events (Coordinator)
             create_event,
             get_events,
@@ -356,6 +389,12 @@ pub fn run() {
             propose_new_species,
             get_final_documents,
             get_my_test_proposals,
+            submit_task_progress,
+            conclude_task,
+            propose_new_matter,
+            propose_new_physical_object,
+            get_my_experiment_logs,
+            sci_submit_security_report,
             // Engineers subsystem (UC-GE-01..03, UC-AGE-01..06, UC-BE-01..05)
             eng_get_my_tasks,
             eng_submit_progress_report,
@@ -370,6 +409,7 @@ pub fn run() {
             eng_get_experiment_archive,
             eng_get_experiment_detail,
             eng_get_my_help_requests,
+            eng_submit_security_report,
             // Astronauts subsystem (UC-AS-01..06, UC-WAN-01..03, UC-TM-03)
             ast_get_my_missions,
             ast_get_mission_detail,
@@ -385,6 +425,8 @@ pub fn run() {
             ast_get_completion_requests_wanderer,
             ast_taskmaster_decide_completion,
             ast_get_completion_requests_taskmaster,
+            ast_get_all_astronaut_counters,
+            ast_submit_security_report,
             // Settlers subsystem (UC-PS-01..06, UC-SC-01..08, UC-CE-01..04, UC-FA-01..02, UC-TS-01..03)
             stl_get_my_tasks,
             stl_get_task_detail,
@@ -411,6 +453,12 @@ pub fn run() {
             stl_get_residence,
             stl_request_farming_supplies,
             stl_log_farm_health,
+            stl_get_progress_reports,
+            stl_get_building_logs,
+            stl_get_farm_health_logs,
+            stl_submit_security_report,
+            stl_list_settlement_anomalies,
+            stl_list_settlement_complaints,
             // Security Teams subsystem (UC-SH-01..05, UC-SS-01..02)
             sec_create_incident_report,
             sec_get_incident_archive,
@@ -422,8 +470,44 @@ pub fn run() {
             sec_get_security_messages,
             sec_get_security_personnel,
             sec_get_my_daily_reports,
+            sec_get_my_assigned_incidents,
+            // TheLibrarian — document restrictions & redactions (UC-LIB-01/02/03)
+            lib_restrict_document_access,
+            lib_redact_document_field,
+            lib_get_restriction_list,
+            lib_remove_restriction,
+            lib_soft_delete_record,
+            // Personnel activity log — all directors (UC-NOM-01, UC-ANC-03)
+            get_personnel_activity_log,
             // Guardian daily security reports view
             dir_get_daily_security_reports,
+            // Director security report (Anchorman, Nomad, Accountant) + my reports view
+            dir_submit_security_report,
+            dir_get_my_security_reports,
+            // Accountant: signed URL for invoice files
+            dir_get_file_signed_url,
+            // Director-accessible role list (for reposition UI)
+            dir_get_role_list,
+            // Nomad settler log views (all settlements)
+            dir_nomad_get_progress_reports,
+            dir_nomad_get_building_logs,
+            dir_nomad_get_farm_logs,
+            dir_nomad_get_anomaly_reports,
+            dir_nomad_get_settler_reports,
+            dir_nomad_get_settlement_inventory,
+            dir_nomad_get_supply_requests,
+            dir_nomad_reposition_personnel,
+            // Guardian incident reports and lost-found logs (UC-GUA-01/02/03/05)
+            dir_guardian_get_incident_reports,
+            dir_guardian_get_lost_found_logs,
+            // Observer / Artificer / Taskmaster: task progress reports
+            dir_get_task_progress_reports,
+            // Observer / Artificer data views
+            dir_get_approved_tests,
+            dir_get_science_archive,
+            dir_get_experiment_logs,
+            dir_get_closure_requests_for_director,
+            dir_get_experiments,
             // Space Station Settlers subsystem (UC-SSS-01..08, UC-SSV-01)
             sst_report_finding_to_security,
             sst_add_to_archive,
@@ -439,6 +523,7 @@ pub fn run() {
             sst_delete_annotation,
             sst_get_annotations,
             sst_get_published_map,
+            sst_get_map_with_url,
             sst_log_arrival,
             sst_log_departure,
             sst_get_personnel,
@@ -463,6 +548,7 @@ pub fn run() {
             med_get_budget_requests,
             med_submit_expenditure_report,
             med_get_expenditure_reports,
+            med_submit_security_report,
             med_get_user_lookup,
             // Sanitary Department subsystem (UC-HS-01..08, UC-STAS-01..04, UC-IC-01, UC-DC-01, UC-WC-01)
             san_get_divisions,
@@ -489,6 +575,7 @@ pub fn run() {
             san_get_inventory_logs,
             san_submit_inspection_report,
             san_get_inspection_reports,
+            san_submit_security_report,
             san_create_disposal_doc,
             san_update_disposal_doc,
             san_get_disposal_docs,
@@ -520,6 +607,15 @@ pub fn run() {
             psy_assistant_get_appointments,
             psy_grant_schedule_access,
             psy_get_access_settings,
+            psy_get_assigned_psychiatrists,
+            psy_submit_security_report,
+            psy_patient_get_my_appointments,
+            psy_get_psychiatrist_upcoming,
+            psy_assistant_get_granted_appointments,
+            psy_get_my_assistant,
+            psy_assign_assistant,
+            psy_remove_assistant,
+            psy_get_assistant_candidates,
             // Administrator subsystem (UC-ADM-01..06 + system management)
             admin_get_system_stats,
             admin_get_audit_log,

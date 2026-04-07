@@ -118,10 +118,16 @@ export async function getMyDailyReports(): Promise<DailySecurityReportSummary[]>
 export async function secSubmitBroadcastRequest(payload: {
   subject: string;
   content: string;
+  target_scope: string;
+  target_ids: string[];
   urgency?: string;
   rationale?: string;
 }): Promise<string> {
   return invoke<string>('sec_submit_broadcast_request', { payload });
+}
+
+export async function getMyAssignedIncidents(): Promise<IncidentReportSummary[]> {
+  return invoke<IncidentReportSummary[]>('sec_get_my_assigned_incidents');
 }
 
 export async function getMyBroadcastRequests(): Promise<SecBroadcastRequestSummary[]> {
